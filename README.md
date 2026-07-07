@@ -38,7 +38,7 @@ Commands:
 
 - All commands first log in with `POST /api/auth/login` and keep the returned `auth_token` cookie.
 - `status` - read ATX power/HDD LED state from `GET /api/atx`
-- `on` - request `POST /api/atx/power?action=on&wait=1`
+- `on` - read `GET /api/atx` first, skip if already on, refuse if ATX is busy, then request `POST /api/atx/power?action=on&wait=1`
 - `off` - request soft ACPI shutdown with `action=off`
 - `force-off` - long-press power with `action=off_hard`
 - `reset` - hardware reset with `action=reset_hard`
@@ -55,3 +55,4 @@ You can also pass config as flags:
 - `off` is a normal short power-button press; the OS must handle ACPI shutdown.
 - `force-off` is equivalent to holding the physical power button and can lose data.
 - `on` is preferred over `click` because the PiKVM-compatible API should do nothing if the server is already powered on.
+- If GLKVM returns HTTP 500 for a waited power-on request, the CLI re-checks ATX state and treats the command as successful when power is already on.

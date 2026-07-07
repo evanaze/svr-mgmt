@@ -41,6 +41,15 @@ type apiResponse[T any] struct {
 	Error  string `json:"error"`
 }
 
+type httpStatusError struct {
+	statusCode int
+	body       string
+}
+
+func (e httpStatusError) Error() string {
+	return fmt.Sprintf("GLKVM returned HTTP %d: %s", e.statusCode, e.body)
+}
+
 type atxState struct {
 	Busy    bool `json:"busy"`
 	Enabled bool `json:"enabled"`
@@ -91,7 +100,7 @@ func run(ctx context.Context, args []string) error {
 		}
 		printState(state)
 	case "on":
-		return client.setPower(ctx, "on", cfg.wait)
+		return client.powerOn(ctx, cfg.wait)
 	case "off":
 		return client.setPower(ctx, "off", cfg.wait)
 	case "force-off", "off-hard":
@@ -222,6 +231,44 @@ func (c *apiClient) setPower(ctx context.Context, action string, wait bool) erro
 	return nil
 }
 
+func (c *apiClient) powerOn(ctx context.Context, wait bool) error {
+	state, err := c.atxState(ctx)
+	if err != nil {
+		return err
+	}
+	if !state.Enabled {
+		return errors.New("ATX power control is disabled")
+	}
+	if state.Busy {
+		return errors.New("ATX is busy performing another operation")
+	}
+	if state.LEDs.Power {
+		fmt.Println("server already powered on")
+		return nil
+	}
+
+	err = c.setPower(ctx, "on", wait)
+	if err == nil || !wait {
+		return err
+	}
+
+	var statusErr httpStatusError
+	if !errors.As(err, &statusErr) || statusErr.statusCode != http.StatusInternalServerError {
+		return err
+	}
+
+	state, stateErr := c.atxState(ctx)
+	if stateErr != nil {
+		return err
+	}
+	if state.LEDs.Power {
+		fmt.Println("server powered on despite GLKVM reporting HTTP 500")
+		return nil
+	}
+
+	return err
+}
+
 func (c *apiClient) click(ctx context.Context, button string, wait bool) error {
 	query := url.Values{}
 	query.Set("button", button)
@@ -273,7 +320,7 @@ func (c *apiClient) doWithBody(ctx context.Context, method string, path string, 
 	}
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("GLKVM returned HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(body)))
+		return httpStatusError{statusCode: res.StatusCode, body: strings.TrimSpace(string(body))}
 	}
 
 	if err := json.Unmarshal(body, out); err != nil {
