@@ -36,7 +36,7 @@ export GLKVM_INSECURE_SKIP_VERIFY=false
 
 Commands:
 
-- All commands first log in with `POST /api/auth/login` and keep the returned `auth_token` cookie.
+- All commands first log in with `POST /api/auth/login` and reuse the returned `auth_token` cookie for later API requests.
 - `status` - read ATX power/HDD LED state from `GET /api/atx`
 - `on` - read `GET /api/atx` first, skip if already on, refuse if ATX is busy, then request `POST /api/atx/power?action=on&wait=1`
 - `off` - request soft ACPI shutdown with `action=off`

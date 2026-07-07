@@ -305,8 +305,6 @@ func (c *apiClient) doWithBody(ctx context.Context, method string, path string, 
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	req.Header.Set("X-KVMD-User", c.username)
-	req.Header.Set("X-KVMD-Passwd", c.password)
 
 	res, err := c.http.Do(req)
 	if err != nil {

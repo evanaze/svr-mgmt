@@ -3,12 +3,70 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
+
+func TestAPIClientLoginAndAtxStateUseSessionCookieWithoutKVMDHeaders(t *testing.T) {
+	t.Parallel()
+
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			if got := r.Header.Get("X-KVMD-User"); got != "" {
+				t.Fatalf("login X-KVMD-User = %q, want empty", got)
+			}
+			if got := r.Header.Get("X-KVMD-Passwd"); got != "" {
+				t.Fatalf("login X-KVMD-Passwd = %q, want empty", got)
+			}
+			if got := r.Header.Get("Content-Type"); got != "application/x-www-form-urlencoded" {
+				t.Fatalf("login Content-Type = %q, want %q", got, "application/x-www-form-urlencoded")
+			}
+			body := mustReadBody(t, r)
+			if got := body.Get("user"); got != "admin" {
+				t.Fatalf("login user = %q, want %q", got, "admin")
+			}
+			if got := body.Get("passwd"); got != "secret" {
+				t.Fatalf("login passwd = %q, want %q", got, "secret")
+			}
+			http.SetCookie(w, &http.Cookie{Name: "auth_token", Value: "session-token", Path: "/"})
+			writeJSON(t, w, `{"ok":true,"result":{}}`)
+		case "/api/atx":
+			if got := r.Header.Get("X-KVMD-User"); got != "" {
+				t.Fatalf("atx X-KVMD-User = %q, want empty", got)
+			}
+			if got := r.Header.Get("X-KVMD-Passwd"); got != "" {
+				t.Fatalf("atx X-KVMD-Passwd = %q, want empty", got)
+			}
+			if cookie, err := r.Cookie("auth_token"); err != nil {
+				t.Fatalf("atx cookie error = %v", err)
+			} else if cookie.Value != "session-token" {
+				t.Fatalf("atx auth_token = %q, want %q", cookie.Value, "session-token")
+			}
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":false,"hdd":false}}}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	if err := client.login(context.Background()); err != nil {
+		t.Fatalf("login() error = %v", err)
+	}
+
+	state, err := client.atxState(context.Background())
+	if err != nil {
+		t.Fatalf("atxState() error = %v", err)
+	}
+	if state.Busy {
+		t.Fatal("atxState().Busy = true, want false")
+	}
+}
 
 func TestAPIClientPowerOnSkips_whenAlreadyOn(t *testing.T) {
 	t.Parallel()
@@ -193,7 +251,10 @@ func newTestAPIClient(t *testing.T, handler http.Handler) *apiClient {
 		baseURL:  baseURL,
 		username: "admin",
 		password: "secret",
-		http:     server.Client(),
+		http: &http.Client{
+			Transport: server.Client().Transport,
+			Jar:       mustCookieJar(t),
+		},
 	}
 }
 
@@ -204,4 +265,28 @@ func writeJSON(t *testing.T, w http.ResponseWriter, body string) {
 	if err != nil {
 		t.Fatalf("fmt.Fprint() error = %v", err)
 	}
+}
+
+func mustReadBody(t *testing.T, r *http.Request) url.Values {
+	t.Helper()
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll() error = %v", err)
+	}
+	values, parseErr := url.ParseQuery(strings.TrimSpace(string(data)))
+	if parseErr != nil {
+		t.Fatalf("url.ParseQuery() error = %v", parseErr)
+	}
+	return values
+}
+
+func mustCookieJar(t *testing.T) http.CookieJar {
+	t.Helper()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New() error = %v", err)
+	}
+	return jar
 }
