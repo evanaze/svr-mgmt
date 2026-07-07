@@ -7,4 +7,9 @@
 
   # https://devenv.sh/tests/
   enterTest = "CGO_ENABLED=0 go test ./...";
+
+  dotenv = {
+    enable = true;
+    filename = "/run/secrets/svr-mgmt/env";
+  };
 }
