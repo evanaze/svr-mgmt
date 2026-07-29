@@ -546,7 +546,8 @@ func newTestAPIClientWithTimeout(t *testing.T, handler http.Handler, timeout tim
 			Transport: server.Client().Transport,
 			Jar:       mustCookieJar(t),
 		},
-		timeout: timeout,
+		timeout:         timeout,
+		powerOffTimeout: timeout,
 	}
 }
 
@@ -583,15 +584,15 @@ func mustCookieJar(t *testing.T) http.CookieJar {
 	return jar
 }
 
-func TestParseArgs_WaitDefaultsFalse(t *testing.T) {
+func TestParseArgs_WaitDefaultsTrue(t *testing.T) {
 	t.Parallel()
 
 	cfg, _, err := parseArgs([]string{"status"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
-	if cfg.wait {
-		t.Fatal("cfg.wait = true, want false by default")
+	if !cfg.wait {
+		t.Fatal("cfg.wait = false, want true by default")
 	}
 }
 

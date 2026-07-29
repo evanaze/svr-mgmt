@@ -21,6 +21,11 @@ import (
 
 const defaultBaseURL = "https://ai-kvm.spitz-pickerel.ts.net"
 
+// defaultPowerOffRecheckTimeout is how long recoverFromHTTP500 polls the ATX
+// state after an off/off_hard action returns HTTP 500. ACPI shutdown can take
+// tens of seconds, so this is much longer than the regular request timeout.
+const defaultPowerOffRecheckTimeout = 60 * time.Second
+
 type config struct {
 	baseURL            string
 	username           string
@@ -33,11 +38,12 @@ type config struct {
 }
 
 type apiClient struct {
-	baseURL  *url.URL
-	username string
-	password string
-	http     *http.Client
-	timeout  time.Duration
+	baseURL         *url.URL
+	username        string
+	password        string
+	http            *http.Client
+	timeout         time.Duration
+	powerOffTimeout time.Duration
 }
 
 type apiResponse[T any] struct {
@@ -145,7 +151,7 @@ func parseArgs(args []string) (config, string, error) {
 		password:           os.Getenv("GLKVM_PASSWORD"),
 		insecureSkipVerify: envBoolDefault("GLKVM_INSECURE_SKIP_VERIFY", true),
 		timeout:            10 * time.Second,
-		wait:               false,
+		wait:               true,
 		keepAwake:          envBoolDefault("GLKVM_KEEP_AWAKE", false),
 		caffeineSchemaDir:  envDefault("GLKVM_CAFFEINE_SCHEMA_DIR", defaultCaffeineSchemaDir()),
 	}
@@ -208,7 +214,8 @@ func newAPIClient(cfg config) (*apiClient, error) {
 			Transport: transport,
 			Jar:       jar,
 		},
-		timeout: cfg.timeout,
+		timeout:         cfg.timeout,
+		powerOffTimeout: defaultPowerOffRecheckTimeout,
 	}, nil
 }
 
@@ -245,7 +252,11 @@ func (c *apiClient) setPower(ctx context.Context, action string, wait bool) erro
 
 	var response apiResponse[map[string]json.RawMessage]
 	if err := c.do(ctx, http.MethodPost, "/api/atx/power", query, &response); err != nil {
-		return c.recoverFromHTTP500(err, wait, expectedPowerAfterAction(action), "ATX power action", action)
+		recheckTimeout := c.timeout
+		if action == "off" || action == "off_hard" {
+			recheckTimeout = c.powerOffTimeout
+		}
+		return c.recoverFromHTTP500(err, wait, expectedPowerAfterAction(action), recheckTimeout, "ATX power action", action)
 	}
 	if !response.OK {
 		return apiError(response.Error)
@@ -280,7 +291,7 @@ func (c *apiClient) click(ctx context.Context, button string, wait bool) error {
 
 	var response apiResponse[map[string]json.RawMessage]
 	if err := c.do(ctx, http.MethodPost, "/api/atx/click", query, &response); err != nil {
-		return c.recoverFromHTTP500(err, wait, func(s atxState) bool { return !s.Busy }, "ATX button click", button)
+		return c.recoverFromHTTP500(err, wait, func(s atxState) bool { return !s.Busy }, c.timeout, "ATX button click", button)
 	}
 	if !response.OK {
 		return apiError(response.Error)
@@ -292,7 +303,7 @@ func (c *apiClient) click(ctx context.Context, button string, wait bool) error {
 
 // recoverFromHTTP500 re-checks ATX state when a waited POST gets HTTP 500,
 // since the GLKVM may report 500 even when the operation succeeded.
-func (c *apiClient) recoverFromHTTP500(postErr error, wait bool, check func(atxState) bool, label, value string) error {
+func (c *apiClient) recoverFromHTTP500(postErr error, wait bool, check func(atxState) bool, recheckTimeout time.Duration, label, value string) error {
 	if !wait {
 		return postErr
 	}
@@ -303,7 +314,7 @@ func (c *apiClient) recoverFromHTTP500(postErr error, wait bool, check func(atxS
 	if check == nil {
 		return postErr
 	}
-	recheckCtx, recheckCancel := context.WithTimeout(context.Background(), c.timeout)
+	recheckCtx, recheckCancel := context.WithTimeout(context.Background(), recheckTimeout)
 	defer recheckCancel()
 	if c.waitForPowerState(recheckCtx, check) {
 		fmt.Printf("sent %s: %s (confirmed despite HTTP 500)\n", label, value)
@@ -417,7 +428,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  -password              GLKVM_PASSWORD, required")
 	fmt.Fprintln(w, "  -insecure-skip-verify  GLKVM_INSECURE_SKIP_VERIFY, defaults to true")
 	fmt.Fprintln(w, "  -timeout               defaults to 10s")
-	fmt.Fprintln(w, "  -wait                  defaults to false")
+	fmt.Fprintln(w, "  -wait                  defaults to true")
 	fmt.Fprintln(w, "  -keep-awake / -ka      GLKVM_KEEP_AWAKE, enable GNOME Caffeine on the host so it does not sleep")
 	fmt.Fprintln(w, "  -caffeine-schema-dir   GLKVM_CAFFEINE_SCHEMA_DIR, auto-detected from common install paths")
 }
