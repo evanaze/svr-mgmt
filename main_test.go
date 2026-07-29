@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestAPIClientLoginAndAtxStateUseSessionCookieWithoutKVMDHeaders(t *testing.T) {
@@ -236,6 +237,44 @@ func TestAPIClientPowerOnReturnsOriginalErrorWithoutRecheck_whenWaitDisabledAndH
 	}
 }
 
+func TestAPIClientPowerOnRecovers_whenHTTP500AndParentContextExhausted(t *testing.T) {
+	t.Parallel()
+
+	var stateRequests atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			requestNumber := stateRequests.Add(1)
+			if requestNumber == 1 {
+				writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":false,"hdd":false}}}`)
+				return
+			}
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/power":
+			// Simulate the GLKVM holding the connection while waiting for the
+			// ATX operation to complete, then returning HTTP 500.
+			time.Sleep(500 * time.Millisecond)
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	// Give the parent context a timeout shorter than the POST delay so it
+	// expires before the re-check can run — reproducing the bug where the
+	// shared context was exhausted by the wait=1 POST.
+	ctx, cancel := context.WithTimeout(context.Background(), 550*time.Millisecond)
+	defer cancel()
+
+	if err := client.powerOn(ctx, true); err != nil {
+		t.Fatalf("powerOn() error = %v", err)
+	}
+
+	if got := stateRequests.Load(); got != 2 {
+		t.Fatalf("state request count = %d, want 2", got)
+	}
+}
+
 func newTestAPIClient(t *testing.T, handler http.Handler) *apiClient {
 	t.Helper()
 
@@ -255,6 +294,7 @@ func newTestAPIClient(t *testing.T, handler http.Handler) *apiClient {
 			Transport: server.Client().Transport,
 			Jar:       mustCookieJar(t),
 		},
+		timeout: 10 * time.Second,
 	}
 }
 

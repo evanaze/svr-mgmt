@@ -33,6 +33,7 @@ type apiClient struct {
 	username string
 	password string
 	http     *http.Client
+	timeout  time.Duration
 }
 
 type apiResponse[T any] struct {
@@ -185,6 +186,7 @@ func newAPIClient(cfg config) (*apiClient, error) {
 			Transport: transport,
 			Jar:       jar,
 		},
+		timeout: cfg.timeout,
 	}, nil
 }
 
@@ -257,7 +259,10 @@ func (c *apiClient) powerOn(ctx context.Context, wait bool) error {
 		return err
 	}
 
-	state, stateErr := c.atxState(ctx)
+	recheckCtx, recheckCancel := context.WithTimeout(context.Background(), c.timeout)
+	defer recheckCancel()
+
+	state, stateErr := c.atxState(recheckCtx)
 	if stateErr != nil {
 		return err
 	}
