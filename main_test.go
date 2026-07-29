@@ -8,6 +8,8 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -354,4 +356,155 @@ func mustCookieJar(t *testing.T) http.CookieJar {
 		t.Fatalf("cookiejar.New() error = %v", err)
 	}
 	return jar
+}
+
+func TestParseArgs_KeepAwakeLongFlag(t *testing.T) {
+	t.Parallel()
+
+	cfg, command, err := parseArgs([]string{"-keep-awake", "status"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.keepAwake {
+		t.Fatal("cfg.keepAwake = false, want true")
+	}
+	if command != "status" {
+		t.Fatalf("command = %q, want %q", command, "status")
+	}
+}
+
+func TestParseArgs_KeepAwakeShortAlias(t *testing.T) {
+	t.Parallel()
+
+	cfg, command, err := parseArgs([]string{"-ka", "on"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.keepAwake {
+		t.Fatal("cfg.keepAwake = false, want true")
+	}
+	if command != "on" {
+		t.Fatalf("command = %q, want %q", command, "on")
+	}
+}
+
+func TestParseArgs_KeepAwakeDefaultsFalse(t *testing.T) {
+	t.Parallel()
+
+	cfg, _, err := parseArgs([]string{"status"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if cfg.keepAwake {
+		t.Fatal("cfg.keepAwake = true, want false by default")
+	}
+}
+
+func TestParseArgs_CaffeineSchemaDirOverride(t *testing.T) {
+	t.Parallel()
+
+	const want = "/tmp/some-schema-dir"
+	cfg, _, err := parseArgs([]string{"-caffeine-schema-dir", want, "status"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if cfg.caffeineSchemaDir != want {
+		t.Fatalf("cfg.caffeineSchemaDir = %q, want %q", cfg.caffeineSchemaDir, want)
+	}
+}
+
+func TestCaffeineGSettingsArgs_EnableTrue(t *testing.T) {
+	t.Parallel()
+
+	got := caffeineGSettingsArgs("/schemas/caffeine", true)
+	want := []string{
+		"--schemadir", "/schemas/caffeine",
+		"set",
+		"org.gnome.shell.extensions.caffeine",
+		"cli-toggle",
+		"true",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("args[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestCaffeineGSettingsArgs_EnableFalse(t *testing.T) {
+	t.Parallel()
+
+	got := caffeineGSettingsArgs("/schemas/caffeine", false)
+	want := []string{
+		"--schemadir", "/schemas/caffeine",
+		"set",
+		"org.gnome.shell.extensions.caffeine",
+		"cli-toggle",
+		"false",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("args[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDefaultCaffeineSchemaDir_PrefersExistingCompiledSchema(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	compiled := filepath.Join(dir, "gschemas.compiled")
+	if err := os.WriteFile(compiled, []byte{}, 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	original := caffeineSchemaCandidates
+	t.Cleanup(func() { caffeineSchemaCandidates = original })
+
+	caffeineSchemaCandidates = func() []string {
+		return []string{"/nonexistent/path", dir, "/also/nonexistent"}
+	}
+
+	if got := defaultCaffeineSchemaDir(); got != dir {
+		t.Fatalf("defaultCaffeineSchemaDir() = %q, want %q", got, dir)
+	}
+}
+
+func TestDefaultCaffeineSchemaDir_FallsBackToFirstCandidate(t *testing.T) {
+	t.Parallel()
+
+	original := caffeineSchemaCandidates
+	t.Cleanup(func() { caffeineSchemaCandidates = original })
+
+	const first = "/nonexistent/first"
+	caffeineSchemaCandidates = func() []string {
+		return []string{first, "/nonexistent/second"}
+	}
+
+	if got := defaultCaffeineSchemaDir(); got != first {
+		t.Fatalf("defaultCaffeineSchemaDir() = %q, want %q", got, first)
+	}
+}
+
+func TestEnableCaffeine_ReturnsErrorWhenSchemaMissing(t *testing.T) {
+	t.Parallel()
+
+	missing := t.TempDir()
+	err := enableCaffeine(context.Background(), missing)
+	if err == nil {
+		t.Fatal("enableCaffeine() error = nil, want error for missing schema")
+	}
+	if !strings.Contains(err.Error(), "gsettings") {
+		t.Fatalf("enableCaffeine() error = %q, want it to mention gsettings", err.Error())
+	}
+}
+
+func TestEnableCaffeine_SucceedsAgainstRealGSettings(t *testing.T) {
+	t.Skip("requires the caffeine extension schema installed (mars); validated manually")
 }

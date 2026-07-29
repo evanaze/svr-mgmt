@@ -12,6 +12,8 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +28,8 @@ type config struct {
 	insecureSkipVerify bool
 	timeout            time.Duration
 	wait               bool
+	keepAwake          bool
+	caffeineSchemaDir  string
 }
 
 type apiClient struct {
@@ -94,6 +98,14 @@ func run(ctx context.Context, args []string) error {
 
 	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
 	defer cancel()
+
+	if cfg.keepAwake {
+		if err := enableCaffeine(ctx, cfg.caffeineSchemaDir); err != nil {
+			return fmt.Errorf("keep-awake: %w", err)
+		}
+		fmt.Println("caffeine enabled on host")
+	}
+
 	if err := client.login(ctx); err != nil {
 		return err
 	}
@@ -134,6 +146,8 @@ func parseArgs(args []string) (config, string, error) {
 		insecureSkipVerify: envBoolDefault("GLKVM_INSECURE_SKIP_VERIFY", true),
 		timeout:            10 * time.Second,
 		wait:               true,
+		keepAwake:          envBoolDefault("GLKVM_KEEP_AWAKE", false),
+		caffeineSchemaDir:  envDefault("GLKVM_CAFFEINE_SCHEMA_DIR", defaultCaffeineSchemaDir()),
 	}
 
 	fs := flag.NewFlagSet("svr-mgmt", flag.ContinueOnError)
@@ -144,6 +158,9 @@ func parseArgs(args []string) (config, string, error) {
 	fs.BoolVar(&cfg.insecureSkipVerify, "insecure-skip-verify", cfg.insecureSkipVerify, "skip TLS certificate verification for self-signed KVM certs")
 	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "request timeout")
 	fs.BoolVar(&cfg.wait, "wait", cfg.wait, "wait for ATX power operation to finish")
+	fs.BoolVar(&cfg.keepAwake, "keep-awake", cfg.keepAwake, "enable the GNOME Caffeine extension on the host so it does not sleep while the server is in use")
+	fs.BoolVar(&cfg.keepAwake, "ka", cfg.keepAwake, "short alias for -keep-awake")
+	fs.StringVar(&cfg.caffeineSchemaDir, "caffeine-schema-dir", cfg.caffeineSchemaDir, "directory containing the caffeine@patapon.info gsettings schema (auto-detected by default)")
 
 	if err := fs.Parse(args); err != nil {
 		return cfg, "", err
@@ -373,6 +390,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  -insecure-skip-verify  GLKVM_INSECURE_SKIP_VERIFY, defaults to true")
 	fmt.Fprintln(w, "  -timeout               defaults to 10s")
 	fmt.Fprintln(w, "  -wait                  defaults to true")
+	fmt.Fprintln(w, "  -keep-awake / -ka      GLKVM_KEEP_AWAKE, enable GNOME Caffeine on the host so it does not sleep")
+	fmt.Fprintln(w, "  -caffeine-schema-dir   GLKVM_CAFFEINE_SCHEMA_DIR, auto-detected from common install paths")
 }
 
 func envDefault(key string, fallback string) string {
@@ -408,4 +427,48 @@ func onOff(value bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+var caffeineSchemaCandidates = func() []string {
+	home, _ := os.UserHomeDir()
+	return []string{
+		filepath.Join(home, ".local/share/gnome-shell/extensions/caffeine@patapon.info/schemas"),
+		"/run/current-system/sw/share/gnome-shell/extensions/caffeine@patapon.info/schemas",
+		"/usr/share/gnome-shell/extensions/caffeine@patapon.info/schemas",
+		"/usr/local/share/gnome-shell/extensions/caffeine@patapon.info/schemas",
+	}
+}
+
+func defaultCaffeineSchemaDir() string {
+	candidates := caffeineSchemaCandidates()
+	for _, dir := range candidates {
+		if _, err := os.Stat(filepath.Join(dir, "gschemas.compiled")); err == nil {
+			return dir
+		}
+	}
+	return candidates[0]
+}
+
+func caffeineGSettingsArgs(schemaDir string, enable bool) []string {
+	value := "false"
+	if enable {
+		value = "true"
+	}
+	return []string{
+		"--schemadir", schemaDir,
+		"set",
+		"org.gnome.shell.extensions.caffeine",
+		"cli-toggle",
+		value,
+	}
+}
+
+func enableCaffeine(ctx context.Context, schemaDir string) error {
+	args := caffeineGSettingsArgs(schemaDir, true)
+	cmd := exec.CommandContext(ctx, "gsettings", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("gsettings %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

@@ -50,6 +50,16 @@ You can also pass config as flags:
 ./svr-mgmt -url https://ai-kvm -user admin -password 'your-kvm-password' on
 ```
 
+### Keep the host awake
+
+`--keep-awake` / `-ka` enables the [GNOME Caffeine extension](https://github.com/eonpatapon/gnome-shell-extension-caffeine#command-line-support) on the host running this CLI (via `gsettings ... set org.gnome.shell.extensions.caffeine cli-toggle true`) before the KVM command runs, so the host does not suspend while you work on the server. It also picks up `GLKVM_KEEP_AWAKE=true`.
+
+```sh
+./svr-mgmt -ka on
+```
+
+The Caffeine gsettings schema is relocatable, so the schemadir is auto-detected from common install paths (user-local `~/.local/share/...`, the NixOS system path `/run/current-system/sw/...`, and `/usr[/local]/share/...`). Override with `-caffeine-schema-dir` or `GLKVM_CAFFEINE_SCHEMA_DIR` if your install lives elsewhere.
+
 ## Notes
 
 - `off` is a normal short power-button press; the OS must handle ACPI shutdown.
