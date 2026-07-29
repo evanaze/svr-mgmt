@@ -212,7 +212,7 @@ func TestAPIClientPowerOnReturnsOriginalError_whenHTTP500AndStateStaysOff(t *tes
 	t.Parallel()
 
 	var stateRequests atomic.Int32
-	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newTestAPIClientWithTimeout(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/atx":
 			stateRequests.Add(1)
@@ -222,7 +222,7 @@ func TestAPIClientPowerOnReturnsOriginalError_whenHTTP500AndStateStaysOff(t *tes
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-	}))
+	}), 100*time.Millisecond)
 
 	err := client.powerOn(context.Background(), true)
 	if err == nil {
@@ -302,7 +302,232 @@ func TestAPIClientPowerOnRecovers_whenHTTP500AndParentContextExhausted(t *testin
 	}
 }
 
+func TestSetPower_RecoversFromHTTP500_whenActionOff(t *testing.T) {
+	t.Parallel()
+
+	var stateRequests atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			stateRequests.Add(1)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
+		case "/api/atx/power":
+			if got := r.URL.Query().Get("action"); got != "off" {
+				t.Fatalf("action = %q, want %q", got, "off")
+			}
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	if err := client.setPower(context.Background(), "off", true); err != nil {
+		t.Fatalf("setPower() error = %v", err)
+	}
+	if got := stateRequests.Load(); got != 1 {
+		t.Fatalf("state request count = %d, want 1", got)
+	}
+}
+
+func TestSetPower_RecoversFromHTTP500_whenActionOffHard(t *testing.T) {
+	t.Parallel()
+
+	var stateRequests atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			stateRequests.Add(1)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
+		case "/api/atx/power":
+			if got := r.URL.Query().Get("action"); got != "off_hard" {
+				t.Fatalf("action = %q, want %q", got, "off_hard")
+			}
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	if err := client.setPower(context.Background(), "off_hard", true); err != nil {
+		t.Fatalf("setPower() error = %v", err)
+	}
+	if got := stateRequests.Load(); got != 1 {
+		t.Fatalf("state request count = %d, want 1", got)
+	}
+}
+
+func TestSetPower_RecoversFromHTTP500_whenActionResetHard(t *testing.T) {
+	t.Parallel()
+
+	var stateRequests atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			requestNumber := stateRequests.Add(1)
+			if requestNumber == 1 {
+				writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
+				return
+			}
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/power":
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	if err := client.setPower(context.Background(), "reset_hard", true); err != nil {
+		t.Fatalf("setPower() error = %v", err)
+	}
+	if got := stateRequests.Load(); got != 2 {
+		t.Fatalf("state request count = %d, want 2", got)
+	}
+}
+
+func TestSetPower_ReturnsOriginalError_whenHTTP500AndStateUnchanged(t *testing.T) {
+	t.Parallel()
+
+	var stateRequests atomic.Int32
+	client := newTestAPIClientWithTimeout(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			stateRequests.Add(1)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/power":
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}), 100*time.Millisecond)
+
+	err := client.setPower(context.Background(), "off", true)
+	if err == nil {
+		t.Fatal("setPower() error = nil, want HTTP 500 error")
+	}
+	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
+		t.Fatalf("setPower() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
+	}
+	if got := stateRequests.Load(); got != 1 {
+		t.Fatalf("state request count = %d, want 1", got)
+	}
+}
+
+func TestSetPower_ReturnsErrorWithoutRecheck_whenWaitDisabledAndHTTP500(t *testing.T) {
+	t.Parallel()
+
+	var stateRequests atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			stateRequests.Add(1)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
+		case "/api/atx/power":
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	err := client.setPower(context.Background(), "off", false)
+	if err == nil {
+		t.Fatal("setPower() error = nil, want HTTP 500 error")
+	}
+	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
+		t.Fatalf("setPower() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
+	}
+	if got := stateRequests.Load(); got != 0 {
+		t.Fatalf("state request count = %d, want 0", got)
+	}
+}
+
+func TestClick_RecoversFromHTTP500_whenWaitTrue(t *testing.T) {
+	t.Parallel()
+
+	var stateRequests atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			stateRequests.Add(1)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/click":
+			if got := r.URL.Query().Get("button"); got != "power" {
+				t.Fatalf("button = %q, want %q", got, "power")
+			}
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	if err := client.click(context.Background(), "power", true); err != nil {
+		t.Fatalf("click() error = %v", err)
+	}
+	if got := stateRequests.Load(); got != 1 {
+		t.Fatalf("state request count = %d, want 1", got)
+	}
+}
+
+func TestClick_ReturnsOriginalError_whenHTTP500AndStateBusy(t *testing.T) {
+	t.Parallel()
+
+	var stateRequests atomic.Int32
+	client := newTestAPIClientWithTimeout(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			stateRequests.Add(1)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":true,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/click":
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}), 100*time.Millisecond)
+
+	err := client.click(context.Background(), "power", true)
+	if err == nil {
+		t.Fatal("click() error = nil, want HTTP 500 error")
+	}
+	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
+		t.Fatalf("click() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
+	}
+	if got := stateRequests.Load(); got != 1 {
+		t.Fatalf("state request count = %d, want 1", got)
+	}
+}
+
+func TestClick_ReturnsErrorWithoutRecheck_whenWaitDisabledAndHTTP500(t *testing.T) {
+	t.Parallel()
+
+	var stateRequests atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			stateRequests.Add(1)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/click":
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	err := client.click(context.Background(), "power", false)
+	if err == nil {
+		t.Fatal("click() error = nil, want HTTP 500 error")
+	}
+	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
+		t.Fatalf("click() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
+	}
+	if got := stateRequests.Load(); got != 0 {
+		t.Fatalf("state request count = %d, want 0", got)
+	}
+}
+
 func newTestAPIClient(t *testing.T, handler http.Handler) *apiClient {
+	return newTestAPIClientWithTimeout(t, handler, 10*time.Second)
+}
+
+func newTestAPIClientWithTimeout(t *testing.T, handler http.Handler, timeout time.Duration) *apiClient {
 	t.Helper()
 
 	server := httptest.NewServer(handler)
@@ -321,7 +546,7 @@ func newTestAPIClient(t *testing.T, handler http.Handler) *apiClient {
 			Transport: server.Client().Transport,
 			Jar:       mustCookieJar(t),
 		},
-		timeout: 10 * time.Second,
+		timeout: timeout,
 	}
 }
 
@@ -356,6 +581,18 @@ func mustCookieJar(t *testing.T) http.CookieJar {
 		t.Fatalf("cookiejar.New() error = %v", err)
 	}
 	return jar
+}
+
+func TestParseArgs_WaitDefaultsFalse(t *testing.T) {
+	t.Parallel()
+
+	cfg, _, err := parseArgs([]string{"status"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if cfg.wait {
+		t.Fatal("cfg.wait = true, want false by default")
+	}
 }
 
 func TestParseArgs_KeepAwakeLongFlag(t *testing.T) {
