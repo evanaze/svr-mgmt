@@ -50,7 +50,7 @@ func TestAPIClientLoginAndAtxStateUseSessionCookieWithoutKVMDHeaders(t *testing.
 			} else if cookie.Value != "session-token" {
 				t.Fatalf("atx auth_token = %q, want %q", cookie.Value, "session-token")
 			}
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":false,"hdd":false}}}`)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -76,7 +76,32 @@ func TestAPIClientPowerOnSkips_whenAlreadyOn(t *testing.T) {
 	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/atx":
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":true,"hdd":false}}}`)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/power":
+			powerRequests.Add(1)
+			writeJSON(t, w, `{"ok":true,"result":{}}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	if err := client.powerOn(context.Background(), true); err != nil {
+		t.Fatalf("powerOn() error = %v", err)
+	}
+
+	if got := powerRequests.Load(); got != 0 {
+		t.Fatalf("expected no power request, got %d", got)
+	}
+}
+
+func TestAPIClientPowerOnSkips_whenInSleepState(t *testing.T) {
+	t.Parallel()
+
+	var powerRequests atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"sleep","leds":{"power":false,"hdd":false}}}`)
 		case "/api/atx/power":
 			powerRequests.Add(1)
 			writeJSON(t, w, `{"ok":true,"result":{}}`)
@@ -101,7 +126,7 @@ func TestAPIClientPowerOnReturnsError_whenBusy(t *testing.T) {
 		if r.URL.Path != "/api/atx" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		writeJSON(t, w, `{"ok":true,"result":{"busy":true,"enabled":true,"leds":{"power":false,"hdd":false}}}`)
+		writeJSON(t, w, `{"ok":true,"result":{"busy":true,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 	}))
 
 	err := client.powerOn(context.Background(), true)
@@ -122,7 +147,7 @@ func TestAPIClientPowerOnPosts_whenOff(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/atx":
 			stateRequests.Add(1)
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":false,"hdd":false}}}`)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 		case "/api/atx/power":
 			powerRequests.Add(1)
 			if got := r.URL.Query().Get("action"); got != "on" {
@@ -161,10 +186,10 @@ func TestAPIClientPowerOnReturnsSuccess_whenHTTP500ButStateTurnsOn(t *testing.T)
 		case "/api/atx":
 			requestNumber := stateRequests.Add(1)
 			if requestNumber == 1 {
-				writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":false,"hdd":false}}}`)
+				writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 				return
 			}
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":true,"hdd":false}}}`)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
 		case "/api/atx/power":
 			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
 		default:
@@ -189,7 +214,7 @@ func TestAPIClientPowerOnReturnsOriginalError_whenHTTP500AndStateStaysOff(t *tes
 		switch r.URL.Path {
 		case "/api/atx":
 			stateRequests.Add(1)
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":false,"hdd":false}}}`)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 		case "/api/atx/power":
 			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
 		default:
@@ -217,7 +242,7 @@ func TestAPIClientPowerOnReturnsOriginalErrorWithoutRecheck_whenWaitDisabledAndH
 		switch r.URL.Path {
 		case "/api/atx":
 			stateRequests.Add(1)
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":false,"hdd":false}}}`)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 		case "/api/atx/power":
 			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
 		default:
@@ -246,10 +271,10 @@ func TestAPIClientPowerOnRecovers_whenHTTP500AndParentContextExhausted(t *testin
 		case "/api/atx":
 			requestNumber := stateRequests.Add(1)
 			if requestNumber == 1 {
-				writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":false,"hdd":false}}}`)
+				writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 				return
 			}
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"leds":{"power":true,"hdd":false}}}`)
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
 		case "/api/atx/power":
 			// Simulate the GLKVM holding the connection while waiting for the
 			// ATX operation to complete, then returning HTTP 500.

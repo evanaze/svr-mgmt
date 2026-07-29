@@ -52,12 +52,17 @@ func (e httpStatusError) Error() string {
 }
 
 type atxState struct {
-	Busy    bool `json:"busy"`
-	Enabled bool `json:"enabled"`
+	Busy    bool   `json:"busy"`
+	Enabled bool   `json:"enabled"`
+	Power   string `json:"power"`
 	LEDs    struct {
 		Power bool `json:"power"`
 		HDD   bool `json:"hdd"`
 	} `json:"leds"`
+}
+
+func (s atxState) isPoweredOn() bool {
+	return s.Power == "on" || s.Power == "sleep"
 }
 
 func main() {
@@ -244,7 +249,7 @@ func (c *apiClient) powerOn(ctx context.Context, wait bool) error {
 	if state.Busy {
 		return errors.New("ATX is busy performing another operation")
 	}
-	if state.LEDs.Power {
+	if state.isPoweredOn() {
 		fmt.Println("server already powered on")
 		return nil
 	}
@@ -266,7 +271,7 @@ func (c *apiClient) powerOn(ctx context.Context, wait bool) error {
 	if stateErr != nil {
 		return err
 	}
-	if state.LEDs.Power {
+	if state.isPoweredOn() {
 		fmt.Println("server powered on despite GLKVM reporting HTTP 500")
 		return nil
 	}
@@ -341,10 +346,11 @@ func apiError(message string) error {
 }
 
 func printState(state atxState) {
-	fmt.Printf("enabled: %t\n", state.Enabled)
-	fmt.Printf("busy:    %t\n", state.Busy)
-	fmt.Printf("power:   %s\n", onOff(state.LEDs.Power))
-	fmt.Printf("hdd:     %s\n", onOff(state.LEDs.HDD))
+	fmt.Printf("enabled:  %t\n", state.Enabled)
+	fmt.Printf("busy:     %t\n", state.Busy)
+	fmt.Printf("power:    %s\n", state.Power)
+	fmt.Printf("power LED: %s\n", onOff(state.LEDs.Power))
+	fmt.Printf("hdd LED:   %s\n", onOff(state.LEDs.HDD))
 }
 
 func printUsage(w io.Writer) {
