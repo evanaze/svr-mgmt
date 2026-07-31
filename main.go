@@ -488,22 +488,13 @@ func defaultCaffeineSchemaDir() string {
 	return candidates[0]
 }
 
-func caffeineGSettingsArgs(schemaDir string, enable bool) []string {
-	value := "false"
-	if enable {
-		value = "true"
-	}
-	return []string{
-		"--schemadir", schemaDir,
+func enableCaffeine(ctx context.Context, schemaDir string) error {
+	args := { "--schemadir", schemaDir,
 		"set",
 		"org.gnome.shell.extensions.caffeine",
 		"cli-toggle",
-		value,
+		"true",
 	}
-}
-
-func enableCaffeine(ctx context.Context, schemaDir string) error {
-	args := caffeineGSettingsArgs(schemaDir, true)
 	cmd := exec.CommandContext(ctx, "gsettings", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
