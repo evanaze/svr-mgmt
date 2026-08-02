@@ -21,10 +21,6 @@ func caffeineGSettingsArgs(enabled bool) []string {
 	}
 }
 
-// enableCaffeine enables Caffeine on the managed server by running the
-// gsettings command over SSH. sshTarget is a single configurable host string
-// (e.g. "user@server" or an SSH config alias); the devices are reached over
-// tailscale, so whatever target you would pass to ssh works here.
 func enableCaffeine(ctx context.Context, sshTarget string) error {
 	args := append([]string{sshTarget}, caffeineGSettingsArgs(true)...)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
@@ -39,16 +35,18 @@ func enableCaffeine(ctx context.Context, sshTarget string) error {
 // attempts. It is a variable so tests can shorten it.
 var keepAwakePollInterval = 5 * time.Second
 
+// Retry timer in case the machine is still booting
+var keepAwakeConnectTimeout = 10 * time.Second
+
 // keepAwake enables the GNOME Caffeine extension on the managed server over
-// SSH. The machine may have just been powered on and is not yet reachable over
-// the network, in which case a direct SSH attempt would hang until the context
-// deadline kills it. To handle that, we retry until SSH accepts the connection
-// or the context expires.
+// SSH.
 func keepAwake(ctx context.Context, sshTarget string) error {
 	pollInterval := keepAwakePollInterval
 
 	for {
-		err := enableCaffeine(ctx, sshTarget)
+		attemptCtx, cancel := context.WithTimeout(ctx, keepAwakeConnectTimeout)
+		err := enableCaffeine(attemptCtx, sshTarget)
+		cancel()
 		if err == nil {
 			return nil
 		}
