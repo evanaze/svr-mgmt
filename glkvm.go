@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // debugWriter is where GLKVM API debug logging goes. It points at stderr so it
@@ -23,6 +24,7 @@ type apiClient struct {
 	username string
 	password string
 	debug    bool
+	timeout  time.Duration
 	http     *http.Client
 }
 
@@ -54,6 +56,7 @@ func newAPIClient(cfg config) (*apiClient, error) {
 		username: cfg.username,
 		password: cfg.password,
 		debug:    cfg.debug,
+		timeout:  cfg.timeout,
 		http: &http.Client{
 			Transport: transport,
 			Jar:       jar,
@@ -91,6 +94,11 @@ func (c *apiClient) atxState(ctx context.Context) (atxState, error) {
 // finished performing it. It passes wait=true so the API withholds its HTTP
 // response until the hardware operation completes (or the request times out),
 // keeping the CLI fully synchronous.
+//
+// Some GLKVM firmware builds perform the requested action but then reply with
+// an HTTP 500 internal error instead of a clean success response. When that
+// happens we recover by re-checking the ATX state to confirm the action
+// actually took effect.
 func (c *apiClient) setPower(ctx context.Context, action string) error {
 	query := url.Values{}
 	query.Set("action", action)
@@ -98,7 +106,7 @@ func (c *apiClient) setPower(ctx context.Context, action string) error {
 
 	var response apiResponse[map[string]json.RawMessage]
 	if err := c.do(ctx, http.MethodPost, "/api/atx/power", query, &response); err != nil {
-		return err
+		return c.recoverFromHTTP500(err, expectedPowerAfterAction(action), "ATX power action", action)
 	}
 	if !response.OK {
 		return apiError(response.Error)
@@ -130,6 +138,9 @@ func (c *apiClient) powerOn(ctx context.Context) error {
 // performing it. It passes wait=true so the API withholds its HTTP response
 // until the click completes (or the request times out), keeping the CLI fully
 // synchronous.
+//
+// As with setPower, an HTTP 500 after a wait=true click may still mean the
+// click went through, so we recover by confirming the ATX is no longer busy.
 func (c *apiClient) click(ctx context.Context, button string) error {
 	query := url.Values{}
 	query.Set("button", button)
@@ -137,7 +148,7 @@ func (c *apiClient) click(ctx context.Context, button string) error {
 
 	var response apiResponse[map[string]json.RawMessage]
 	if err := c.do(ctx, http.MethodPost, "/api/atx/click", query, &response); err != nil {
-		return err
+		return c.recoverFromHTTP500(err, func(s atxState) bool { return !s.Busy }, "ATX button click", button)
 	}
 	if !response.OK {
 		return apiError(response.Error)
@@ -145,6 +156,72 @@ func (c *apiClient) click(ctx context.Context, button string) error {
 
 	fmt.Printf("Server button click: %s\n", button)
 	return nil
+}
+
+// recoverFromHTTP500 handles the GLKVM firmware quirk where a wait=true POST
+// performs the ATX action but returns HTTP 500 instead of a clean success. It
+// re-checks the ATX state to confirm the action actually took effect, and only
+// surfaces the original error if the expected state was never reached.
+func (c *apiClient) recoverFromHTTP500(postErr error, check func(atxState) bool, label, value string) error {
+	var statusErr httpStatusError
+	if !errors.As(postErr, &statusErr) || statusErr.statusCode != http.StatusInternalServerError {
+		return postErr
+	}
+	if check == nil {
+		return postErr
+	}
+	// Use a fresh timeout: the parent context may already be exhausted by the
+	// wait=true POST that triggered the 500.
+	recheckCtx, recheckCancel := context.WithTimeout(context.Background(), c.recheckTimeout())
+	defer recheckCancel()
+	if c.waitForPowerState(recheckCtx, check) {
+		fmt.Printf("sent %s: %s (confirmed despite HTTP 500)\n", label, value)
+		return nil
+	}
+	return postErr
+}
+
+// recheckTimeout returns how long to poll ATX state after a spurious HTTP 500.
+// It falls back to a default of 10s if the configured timeout is unset.
+func (c *apiClient) recheckTimeout() time.Duration {
+	if c.timeout > 0 {
+		return c.timeout
+	}
+	return 10 * time.Second
+}
+
+// waitForPowerState polls GET /api/atx until check(state) returns true, the
+// context expires, or a state fetch fails.
+func (c *apiClient) waitForPowerState(ctx context.Context, check func(atxState) bool) bool {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, err := c.atxState(ctx)
+		if err == nil && check(state) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+// expectedPowerAfterAction returns a predicate describing the ATX state the
+// given action should produce, so a spurious HTTP 500 can be confirmed as a
+// success.
+func expectedPowerAfterAction(action string) func(atxState) bool {
+	switch action {
+	case "on":
+		return func(s atxState) bool { return s.isPoweredOn() }
+	case "off", "off_hard":
+		return func(s atxState) bool { return s.Power == "off" }
+	case "reset_hard":
+		return func(s atxState) bool { return s.isPoweredOn() }
+	default:
+		return nil
+	}
 }
 
 func (c *apiClient) do(ctx context.Context, method string, path string, query url.Values, out any) error {

@@ -50,6 +50,16 @@ API withholds its HTTP response until the ATX action completes. The CLI only
 exits after the GLKVM responds (`ok=true` means the operation finished) or the
 request times out (default 10s, configurable with `-timeout`).
 
+> **GLKVM HTTP 500 quirk.** Some GLKVM firmware builds perform the requested
+> ATX action but then reply with `HTTP 500: Server got itself in trouble` (an
+> unhandled Go server error) instead of a clean success response. To handle
+> this, after a waited power/click POST returns 500 the CLI re-checks `GET
+> /api/atx` (using a fresh timeout) to confirm the action actually took effect
+> (e.g. power reaches the expected state, or ATX is no longer busy). If the
+> action is confirmed, the command exits successfully with a
+> "(confirmed despite HTTP 500)" note; if the expected state is never reached,
+> the original HTTP 500 error is returned.
+
 You can also pass config as flags:
 
 ```sh

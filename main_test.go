@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestAPIClientLoginAndAtxStateUseSessionCookieWithoutKVMDHeaders(t *testing.T) {
@@ -179,14 +180,14 @@ func TestAPIClientPowerOnPosts_whenOff(t *testing.T) {
 	}
 }
 
-func TestSetPower_ReturnsHTTPError_whenNon2xxResponse(t *testing.T) {
+func TestSetPower_Recovers_whenHTTP500AndStateConfirms(t *testing.T) {
 	t.Parallel()
 
-	var stateRequests atomic.Int32
 	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/atx":
-			stateRequests.Add(1)
+			// Power is "off", matching the expected outcome of action=off, so
+			// the spurious HTTP 500 is treated as a success.
 			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 		case "/api/atx/power":
 			if got := r.URL.Query().Get("wait"); got != "true" {
@@ -198,16 +199,67 @@ func TestSetPower_ReturnsHTTPError_whenNon2xxResponse(t *testing.T) {
 		}
 	}))
 
+	if err := client.setPower(context.Background(), "off"); err != nil {
+		t.Fatalf("setPower() error = %v, want nil (recovered on 500)", err)
+	}
+}
+
+func TestSetPower_ReturnsHTTPError_whenHTTP500NotConfirmed(t *testing.T) {
+	t.Parallel()
+
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			// Power stays "on"; never reaches the expected "off", so the 500
+			// cannot be confirmed as a success.
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/power":
+			if got := r.URL.Query().Get("wait"); got != "true" {
+				t.Fatalf("setPower wait = %q, want %q", got, "true")
+			}
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	// Short window so the unconfirmed recovery returns promptly.
+	client.timeout = 300 * time.Millisecond
+
 	err := client.setPower(context.Background(), "off")
 	if err == nil {
-		t.Fatal("setPower() error = nil, want HTTP 500 error")
+		t.Fatal("setPower() error = nil, want HTTP 500 error (not confirmed)")
 	}
 	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
 		t.Fatalf("setPower() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
 	}
-	// No re-check happens: the response is authoritative.
-	if got := stateRequests.Load(); got != 0 {
-		t.Fatalf("state request count = %d, want 0", got)
+}
+
+func TestAPIClientPowerOn_Recovers_whenHTTP500AndStateConfirms(t *testing.T) {
+	t.Parallel()
+
+	var atxCalls atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			// First call is powerOn's pre-check (power off -> proceeds);
+			// subsequent calls are recovery re-checks (power on -> confirms).
+			if atxCalls.Add(1) == 1 {
+				writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
+				return
+			}
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/power":
+			if got := r.URL.Query().Get("action"); got != "on" {
+				t.Fatalf("action = %q, want %q", got, "on")
+			}
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	if err := client.powerOn(context.Background()); err != nil {
+		t.Fatalf("powerOn() error = %v, want nil (recovered on 500)", err)
 	}
 }
 
@@ -230,14 +282,14 @@ func TestSetPower_ReturnsAPIFailure_whenOkFalse(t *testing.T) {
 	}
 }
 
-func TestClick_ReturnsHTTPError_whenNon2xxResponse(t *testing.T) {
+func TestClick_Recovers_whenHTTP500AndStateNotBusy(t *testing.T) {
 	t.Parallel()
 
-	var stateRequests atomic.Int32
 	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/atx":
-			stateRequests.Add(1)
+			// Not busy, so the click is confirmed to have finished despite the
+			// spurious HTTP 500.
 			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
 		case "/api/atx/click":
 			if got := r.URL.Query().Get("button"); got != "power" {
@@ -252,15 +304,34 @@ func TestClick_ReturnsHTTPError_whenNon2xxResponse(t *testing.T) {
 		}
 	}))
 
+	if err := client.click(context.Background(), "power"); err != nil {
+		t.Fatalf("click() error = %v, want nil (recovered on 500)", err)
+	}
+}
+
+func TestClick_ReturnsHTTPError_whenHTTP500NotConfirmed(t *testing.T) {
+	t.Parallel()
+
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			// Stays busy, so the click cannot be confirmed to have finished.
+			writeJSON(t, w, `{"ok":true,"result":{"busy":true,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/click":
+			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	// Short window so the unconfirmed recovery returns promptly.
+	client.timeout = 300 * time.Millisecond
+
 	err := client.click(context.Background(), "power")
 	if err == nil {
-		t.Fatal("click() error = nil, want HTTP 500 error")
+		t.Fatal("click() error = nil, want HTTP 500 error (not confirmed)")
 	}
 	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
 		t.Fatalf("click() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
-	}
-	if got := stateRequests.Load(); got != 0 {
-		t.Fatalf("state request count = %d, want 0", got)
 	}
 }
 
