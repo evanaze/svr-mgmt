@@ -38,16 +38,31 @@ Commands:
 
 - All commands first log in with `POST /api/auth/login` and reuse the returned `auth_token` cookie for later API requests.
 - `status` - read ATX power/HDD LED state from `GET /api/atx`
-- `on` - read `GET /api/atx` first, skip if already on, refuse if ATX is busy, then request `POST /api/atx/power?action=on&wait=1`
+- `on` - read `GET /api/atx` first, skip if already on, refuse if ATX is busy, then request `POST /api/atx/power?action=on`
 - `off` - request soft ACPI shutdown with `action=off`
 - `force-off` - long-press power with `action=off_hard`
 - `reset` - hardware reset with `action=reset_hard`
 - `click`, `click-long`, `reset-click` - raw button clicks via `POST /api/atx/click`
 
+Each command reports success or failure as soon as the GLKVM HTTP response
+arrives: `ok=true` means the command succeeded, while `ok=false` or a non-2xx
+status returns an error immediately. The CLI does not wait for or re-check the
+ATX power state after issuing a command.
+
 You can also pass config as flags:
 
 ```sh
 ./svr-mgmt -url https://ai-kvm -user admin -password 'your-kvm-password' on
+```
+
+### Debug the GLKVM API
+
+Use `-debug` (or `GLKVM_DEBUG=true`) to log every request sent to and response
+received from the GLKVM API to stderr. Request bodies are shown with the
+password redacted.
+
+```sh
+./svr-mgmt -debug on
 ```
 
 ### Keep the host awake
@@ -65,4 +80,4 @@ The Caffeine gsettings schema is relocatable, so the schemadir is auto-detected 
 - `off` is a normal short power-button press; the OS must handle ACPI shutdown.
 - `force-off` is equivalent to holding the physical power button and can lose data.
 - `on` is preferred over `click` because the PiKVM-compatible API should do nothing if the server is already powered on.
-- If GLKVM returns HTTP 500 for a waited power-on request, the CLI re-checks ATX state and treats the command as successful when power is already on.
+- Use `-debug` (or `GLKVM_DEBUG=true`) to log every GLKVM API request and response to stderr, including redacted request bodies and response bodies. This is useful for troubleshooting commands that fail.

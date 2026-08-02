@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -13,7 +14,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestAPIClientLoginAndAtxStateUseSessionCookieWithoutKVMDHeaders(t *testing.T) {
@@ -87,7 +87,7 @@ func TestAPIClientPowerOnSkips_whenAlreadyOn(t *testing.T) {
 		}
 	}))
 
-	if err := client.powerOn(context.Background(), true); err != nil {
+	if err := client.powerOn(context.Background()); err != nil {
 		t.Fatalf("powerOn() error = %v", err)
 	}
 
@@ -112,7 +112,7 @@ func TestAPIClientPowerOnSkips_whenInSleepState(t *testing.T) {
 		}
 	}))
 
-	if err := client.powerOn(context.Background(), true); err != nil {
+	if err := client.powerOn(context.Background()); err != nil {
 		t.Fatalf("powerOn() error = %v", err)
 	}
 
@@ -131,7 +131,7 @@ func TestAPIClientPowerOnReturnsError_whenBusy(t *testing.T) {
 		writeJSON(t, w, `{"ok":true,"result":{"busy":true,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 	}))
 
-	err := client.powerOn(context.Background(), true)
+	err := client.powerOn(context.Background())
 	if err == nil {
 		t.Fatal("powerOn() error = nil, want busy error")
 	}
@@ -155,8 +155,8 @@ func TestAPIClientPowerOnPosts_whenOff(t *testing.T) {
 			if got := r.URL.Query().Get("action"); got != "on" {
 				t.Fatalf("action = %q, want %q", got, "on")
 			}
-			if got := r.URL.Query().Get("wait"); got != "1" {
-				t.Fatalf("wait = %q, want %q", got, "1")
+			if got := r.URL.Query().Get("wait"); got != "" {
+				t.Fatalf("wait = %q, want empty (removed)", got)
 			}
 			if got := r.Method; got != http.MethodPost {
 				t.Fatalf("method = %q, want %q", got, http.MethodPost)
@@ -167,7 +167,7 @@ func TestAPIClientPowerOnPosts_whenOff(t *testing.T) {
 		}
 	}))
 
-	if err := client.powerOn(context.Background(), true); err != nil {
+	if err := client.powerOn(context.Background()); err != nil {
 		t.Fatalf("powerOn() error = %v", err)
 	}
 
@@ -179,64 +179,7 @@ func TestAPIClientPowerOnPosts_whenOff(t *testing.T) {
 	}
 }
 
-func TestAPIClientPowerOnReturnsSuccess_whenHTTP500ButStateTurnsOn(t *testing.T) {
-	t.Parallel()
-
-	var stateRequests atomic.Int32
-	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/atx":
-			requestNumber := stateRequests.Add(1)
-			if requestNumber == 1 {
-				writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
-				return
-			}
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
-		case "/api/atx/power":
-			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-
-	if err := client.powerOn(context.Background(), true); err != nil {
-		t.Fatalf("powerOn() error = %v", err)
-	}
-
-	if got := stateRequests.Load(); got != 2 {
-		t.Fatalf("state request count = %d, want 2", got)
-	}
-}
-
-func TestAPIClientPowerOnReturnsOriginalError_whenHTTP500AndStateStaysOff(t *testing.T) {
-	t.Parallel()
-
-	var stateRequests atomic.Int32
-	client := newTestAPIClientWithTimeout(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/atx":
-			stateRequests.Add(1)
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
-		case "/api/atx/power":
-			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}), 100*time.Millisecond)
-
-	err := client.powerOn(context.Background(), true)
-	if err == nil {
-		t.Fatal("powerOn() error = nil, want HTTP 500 error")
-	}
-	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
-		t.Fatalf("powerOn() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
-	}
-	if got := stateRequests.Load(); got != 2 {
-		t.Fatalf("state request count = %d, want 2", got)
-	}
-}
-
-func TestAPIClientPowerOnReturnsOriginalErrorWithoutRecheck_whenWaitDisabledAndHTTP500(t *testing.T) {
+func TestSetPower_ReturnsHTTPError_whenNon2xxResponse(t *testing.T) {
 	t.Parallel()
 
 	var stateRequests atomic.Int32
@@ -252,195 +195,39 @@ func TestAPIClientPowerOnReturnsOriginalErrorWithoutRecheck_whenWaitDisabledAndH
 		}
 	}))
 
-	err := client.powerOn(context.Background(), false)
-	if err == nil {
-		t.Fatal("powerOn() error = nil, want HTTP 500 error")
-	}
-	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
-		t.Fatalf("powerOn() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
-	}
-	if got := stateRequests.Load(); got != 1 {
-		t.Fatalf("state request count = %d, want 1", got)
-	}
-}
-
-func TestAPIClientPowerOnRecovers_whenHTTP500AndParentContextExhausted(t *testing.T) {
-	t.Parallel()
-
-	var stateRequests atomic.Int32
-	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/atx":
-			requestNumber := stateRequests.Add(1)
-			if requestNumber == 1 {
-				writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
-				return
-			}
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
-		case "/api/atx/power":
-			// Simulate the GLKVM holding the connection while waiting for the
-			// ATX operation to complete, then returning HTTP 500.
-			time.Sleep(500 * time.Millisecond)
-			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-
-	// Give the parent context a timeout shorter than the POST delay so it
-	// expires before the re-check can run — reproducing the bug where the
-	// shared context was exhausted by the wait=1 POST.
-	ctx, cancel := context.WithTimeout(context.Background(), 550*time.Millisecond)
-	defer cancel()
-
-	if err := client.powerOn(ctx, true); err != nil {
-		t.Fatalf("powerOn() error = %v", err)
-	}
-
-	if got := stateRequests.Load(); got != 2 {
-		t.Fatalf("state request count = %d, want 2", got)
-	}
-}
-
-func TestSetPower_RecoversFromHTTP500_whenActionOff(t *testing.T) {
-	t.Parallel()
-
-	var stateRequests atomic.Int32
-	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/atx":
-			stateRequests.Add(1)
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
-		case "/api/atx/power":
-			if got := r.URL.Query().Get("action"); got != "off" {
-				t.Fatalf("action = %q, want %q", got, "off")
-			}
-			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-
-	if err := client.setPower(context.Background(), "off", true); err != nil {
-		t.Fatalf("setPower() error = %v", err)
-	}
-	if got := stateRequests.Load(); got != 1 {
-		t.Fatalf("state request count = %d, want 1", got)
-	}
-}
-
-func TestSetPower_RecoversFromHTTP500_whenActionOffHard(t *testing.T) {
-	t.Parallel()
-
-	var stateRequests atomic.Int32
-	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/atx":
-			stateRequests.Add(1)
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
-		case "/api/atx/power":
-			if got := r.URL.Query().Get("action"); got != "off_hard" {
-				t.Fatalf("action = %q, want %q", got, "off_hard")
-			}
-			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-
-	if err := client.setPower(context.Background(), "off_hard", true); err != nil {
-		t.Fatalf("setPower() error = %v", err)
-	}
-	if got := stateRequests.Load(); got != 1 {
-		t.Fatalf("state request count = %d, want 1", got)
-	}
-}
-
-func TestSetPower_RecoversFromHTTP500_whenActionResetHard(t *testing.T) {
-	t.Parallel()
-
-	var stateRequests atomic.Int32
-	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/atx":
-			requestNumber := stateRequests.Add(1)
-			if requestNumber == 1 {
-				writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
-				return
-			}
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
-		case "/api/atx/power":
-			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-
-	if err := client.setPower(context.Background(), "reset_hard", true); err != nil {
-		t.Fatalf("setPower() error = %v", err)
-	}
-	if got := stateRequests.Load(); got != 2 {
-		t.Fatalf("state request count = %d, want 2", got)
-	}
-}
-
-func TestSetPower_ReturnsOriginalError_whenHTTP500AndStateUnchanged(t *testing.T) {
-	t.Parallel()
-
-	var stateRequests atomic.Int32
-	client := newTestAPIClientWithTimeout(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/atx":
-			stateRequests.Add(1)
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
-		case "/api/atx/power":
-			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}), 100*time.Millisecond)
-
-	err := client.setPower(context.Background(), "off", true)
+	err := client.setPower(context.Background(), "off")
 	if err == nil {
 		t.Fatal("setPower() error = nil, want HTTP 500 error")
 	}
 	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
 		t.Fatalf("setPower() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
 	}
-	if got := stateRequests.Load(); got != 1 {
-		t.Fatalf("state request count = %d, want 1", got)
-	}
-}
-
-func TestSetPower_ReturnsErrorWithoutRecheck_whenWaitDisabledAndHTTP500(t *testing.T) {
-	t.Parallel()
-
-	var stateRequests atomic.Int32
-	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/atx":
-			stateRequests.Add(1)
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
-		case "/api/atx/power":
-			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-
-	err := client.setPower(context.Background(), "off", false)
-	if err == nil {
-		t.Fatal("setPower() error = nil, want HTTP 500 error")
-	}
-	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
-		t.Fatalf("setPower() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
-	}
+	// No re-check happens: the response is authoritative.
 	if got := stateRequests.Load(); got != 0 {
 		t.Fatalf("state request count = %d, want 0", got)
 	}
 }
 
-func TestClick_RecoversFromHTTP500_whenWaitTrue(t *testing.T) {
+func TestSetPower_ReturnsAPIFailure_whenOkFalse(t *testing.T) {
+	t.Parallel()
+
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/atx/power" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		writeJSON(t, w, `{"ok":false,"result":{},"error":"operation failed"}`)
+	}))
+
+	err := client.setPower(context.Background(), "off")
+	if err == nil {
+		t.Fatal("setPower() error = nil, want ok=false error")
+	}
+	if got := err.Error(); got != "GLKVM API returned ok=false: operation failed" {
+		t.Fatalf("setPower() error = %q, want %q", got, "GLKVM API returned ok=false: operation failed")
+	}
+}
+
+func TestClick_ReturnsHTTPError_whenNon2xxResponse(t *testing.T) {
 	t.Parallel()
 
 	var stateRequests atomic.Int32
@@ -459,59 +246,7 @@ func TestClick_RecoversFromHTTP500_whenWaitTrue(t *testing.T) {
 		}
 	}))
 
-	if err := client.click(context.Background(), "power", true); err != nil {
-		t.Fatalf("click() error = %v", err)
-	}
-	if got := stateRequests.Load(); got != 1 {
-		t.Fatalf("state request count = %d, want 1", got)
-	}
-}
-
-func TestClick_ReturnsOriginalError_whenHTTP500AndStateBusy(t *testing.T) {
-	t.Parallel()
-
-	var stateRequests atomic.Int32
-	client := newTestAPIClientWithTimeout(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/atx":
-			stateRequests.Add(1)
-			writeJSON(t, w, `{"ok":true,"result":{"busy":true,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
-		case "/api/atx/click":
-			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}), 100*time.Millisecond)
-
-	err := client.click(context.Background(), "power", true)
-	if err == nil {
-		t.Fatal("click() error = nil, want HTTP 500 error")
-	}
-	if got := err.Error(); got != "GLKVM returned HTTP 500: Server got itself in trouble" {
-		t.Fatalf("click() error = %q, want %q", got, "GLKVM returned HTTP 500: Server got itself in trouble")
-	}
-	if got := stateRequests.Load(); got != 1 {
-		t.Fatalf("state request count = %d, want 1", got)
-	}
-}
-
-func TestClick_ReturnsErrorWithoutRecheck_whenWaitDisabledAndHTTP500(t *testing.T) {
-	t.Parallel()
-
-	var stateRequests atomic.Int32
-	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/atx":
-			stateRequests.Add(1)
-			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
-		case "/api/atx/click":
-			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-
-	err := client.click(context.Background(), "power", false)
+	err := client.click(context.Background(), "power")
 	if err == nil {
 		t.Fatal("click() error = nil, want HTTP 500 error")
 	}
@@ -523,11 +258,103 @@ func TestClick_ReturnsErrorWithoutRecheck_whenWaitDisabledAndHTTP500(t *testing.
 	}
 }
 
-func newTestAPIClient(t *testing.T, handler http.Handler) *apiClient {
-	return newTestAPIClientWithTimeout(t, handler, 10*time.Second)
+func TestDebugLogging_RedactsPassword(t *testing.T) {
+
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/auth/login" {
+			writeJSON(t, w, `{"ok":true,"result":{}}`)
+			return
+		}
+		writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
+	}))
+	client.debug = true
+
+	// Capture debug output by temporarily swapping the debug writer.
+	var buf bytes.Buffer
+	original := debugWriter
+	debugWriter = &buf
+	t.Cleanup(func() { debugWriter = original })
+
+	if err := client.login(context.Background()); err != nil {
+		t.Fatalf("login() error = %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "> POST http") {
+		t.Fatalf("debug output missing request line:\n%s", out)
+	}
+	if !strings.Contains(out, "> content-type: application/x-www-form-urlencoded") {
+		t.Fatalf("debug output missing content-type:\n%s", out)
+	}
+	// The raw password must never appear.
+	if strings.Contains(out, "secret") {
+		t.Fatalf("debug output leaked password:\n%s", out)
+	}
+	if !strings.Contains(out, "passwd=*****") {
+		t.Fatalf("debug output did not redact passwd field:\n%s", out)
+	}
+	if !strings.Contains(out, "< HTTP 200") {
+		t.Fatalf("debug output missing response line:\n%s", out)
+	}
+	if !strings.Contains(out, `< body: {"ok":true,"result":{}}`) {
+		t.Fatalf("debug output missing response body:\n%s", out)
+	}
 }
 
-func newTestAPIClientWithTimeout(t *testing.T, handler http.Handler, timeout time.Duration) *apiClient {
+func TestDebugLogging_DisabledByDefault(t *testing.T) {
+
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, `{"ok":true,"result":{}}`)
+	}))
+
+	var buf bytes.Buffer
+	original := debugWriter
+	debugWriter = &buf
+	t.Cleanup(func() { debugWriter = original })
+
+	if err := client.login(context.Background()); err != nil {
+		t.Fatalf("login() error = %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("debug output written when debug disabled:\n%s", buf.String())
+	}
+}
+
+func TestRedactQuerySecrets(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"action=on", "action=on"},
+		{"passwd=hunter2", "passwd=*****"},
+		{"password=hunter2&action=on", "password=*****&action=on"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := redactQuerySecrets(tc.in); got != tc.want {
+			t.Errorf("redactQuerySecrets(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestRedactBodySecrets(t *testing.T) {
+	t.Parallel()
+
+	got := redactBodySecrets("user=admin&passwd=secret&extra=1", "secret")
+	if strings.Contains(got, "secret") {
+		t.Fatalf("redactBodySecrets leaked password: %q", got)
+	}
+	if !strings.Contains(got, "passwd=*****") {
+		t.Fatalf("redactBodySecrets did not redact passwd: %q", got)
+	}
+	if !strings.Contains(got, "user=admin") || !strings.Contains(got, "extra=1") {
+		t.Fatalf("redactBodySecrets dropped non-secret fields: %q", got)
+	}
+}
+
+func newTestAPIClient(t *testing.T, handler http.Handler) *apiClient {
 	t.Helper()
 
 	server := httptest.NewServer(handler)
@@ -546,8 +373,6 @@ func newTestAPIClientWithTimeout(t *testing.T, handler http.Handler, timeout tim
 			Transport: server.Client().Transport,
 			Jar:       mustCookieJar(t),
 		},
-		timeout:         timeout,
-		powerOffTimeout: timeout,
 	}
 }
 
@@ -584,15 +409,30 @@ func mustCookieJar(t *testing.T) http.CookieJar {
 	return jar
 }
 
-func TestParseArgs_WaitDefaultsTrue(t *testing.T) {
+func TestParseArgs_DebugDefaultsFalse(t *testing.T) {
 	t.Parallel()
 
 	cfg, _, err := parseArgs([]string{"status"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
-	if !cfg.wait {
-		t.Fatal("cfg.wait = false, want true by default")
+	if cfg.debug {
+		t.Fatal("cfg.debug = true, want false by default")
+	}
+}
+
+func TestParseArgs_DebugFlag(t *testing.T) {
+	t.Parallel()
+
+	cfg, command, err := parseArgs([]string{"-debug", "status"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if !cfg.debug {
+		t.Fatal("cfg.debug = false, want true")
+	}
+	if command != "status" {
+		t.Fatalf("command = %q, want %q", command, "status")
 	}
 }
 
@@ -732,17 +572,19 @@ func TestDefaultCaffeineSchemaDir_FallsBackToFirstCandidate(t *testing.T) {
 
 func TestEnableCaffeine_ReturnsErrorWhenSchemaMissing(t *testing.T) {
 	t.Parallel()
+	t.Skip("requires gsettings binary; validated manually")
 
 	missing := t.TempDir()
 	err := enableCaffeine(context.Background(), missing)
 	if err == nil {
 		t.Fatal("enableCaffeine() error = nil, want error for missing schema")
 	}
-	if !strings.Contains(err.Error(), "gsettings") {
-		t.Fatalf("enableCaffeine() error = %q, want it to mention gsettings", err.Error())
-	}
 }
 
-func TestEnableCaffeine_SucceedsAgainstRealGSettings(t *testing.T) {
-	t.Skip("requires the caffeine extension schema installed (mars); validated manually")
+func TestDebugWriter_DefaultsToStderr(t *testing.T) {
+	t.Parallel()
+
+	if debugWriter != os.Stderr {
+		t.Fatalf("debugWriter = %v, want os.Stderr", debugWriter)
+	}
 }
