@@ -29,7 +29,7 @@ func parseArgs(args []string) (config, string, error) {
 		username:           envDefault("GLKVM_USER", "admin"),
 		password:           os.Getenv("GLKVM_PASSWORD"),
 		insecureSkipVerify: envBoolDefault("GLKVM_INSECURE_SKIP_VERIFY", true),
-		timeout:            10 * time.Second,
+		timeout:            30 * time.Second,
 		debug:              envBoolDefault("GLKVM_DEBUG", false),
 		keepAwake:          envBoolDefault("GLKVM_KEEP_AWAKE", false),
 		caffeineSchemaDir:  envDefault("GLKVM_CAFFEINE_SCHEMA_DIR", defaultCaffeineSchemaDir()),
@@ -80,7 +80,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  -user                  GLKVM_USER, defaults to admin")
 	fmt.Fprintln(w, "  -password              GLKVM_PASSWORD, required")
 	fmt.Fprintln(w, "  -insecure-skip-verify  GLKVM_INSECURE_SKIP_VERIFY, defaults to true")
-	fmt.Fprintln(w, "  -timeout               defaults to 10s")
+	fmt.Fprintln(w, "  -timeout               defaults to 30s")
 	fmt.Fprintln(w, "  -debug                 GLKVM_DEBUG, log GLKVM API requests/responses to stderr")
 	fmt.Fprintln(w, "  -keep-awake / -ka      GLKVM_KEEP_AWAKE, enable GNOME Caffeine on the host so it does not sleep")
 	fmt.Fprintln(w, "  -caffeine-schema-dir   GLKVM_CAFFEINE_SCHEMA_DIR, auto-detected from common install paths")

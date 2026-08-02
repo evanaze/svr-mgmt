@@ -156,9 +156,6 @@ func TestAPIClientPowerOnPosts_whenOff(t *testing.T) {
 			if got := r.URL.Query().Get("action"); got != "on" {
 				t.Fatalf("action = %q, want %q", got, "on")
 			}
-			if got := r.URL.Query().Get("wait"); got != "true" {
-				t.Fatalf("wait = %q, want %q", got, "true")
-			}
 			if got := r.Method; got != http.MethodPost {
 				t.Fatalf("method = %q, want %q", got, http.MethodPost)
 			}
@@ -190,9 +187,6 @@ func TestSetPower_Recovers_whenHTTP500AndStateConfirms(t *testing.T) {
 			// the spurious HTTP 500 is treated as a success.
 			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 		case "/api/atx/power":
-			if got := r.URL.Query().Get("wait"); got != "true" {
-				t.Fatalf("setPower wait = %q, want %q", got, "true")
-			}
 			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -214,9 +208,6 @@ func TestSetPower_ReturnsHTTPError_whenHTTP500NotConfirmed(t *testing.T) {
 			// cannot be confirmed as a success.
 			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
 		case "/api/atx/power":
-			if got := r.URL.Query().Get("wait"); got != "true" {
-				t.Fatalf("setPower wait = %q, want %q", got, "true")
-			}
 			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -294,9 +285,6 @@ func TestClick_Recovers_whenHTTP500AndStateNotBusy(t *testing.T) {
 		case "/api/atx/click":
 			if got := r.URL.Query().Get("button"); got != "power" {
 				t.Fatalf("button = %q, want %q", got, "power")
-			}
-			if got := r.URL.Query().Get("wait"); got != "true" {
-				t.Fatalf("click wait = %q, want %q", got, "true")
 			}
 			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
 		default:

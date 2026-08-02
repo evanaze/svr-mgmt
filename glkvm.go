@@ -90,10 +90,7 @@ func (c *apiClient) atxState(ctx context.Context) (atxState, error) {
 	return response.Result, nil
 }
 
-// setPower issues an ATX power action and returns only once the GLKVM has
-// finished performing it. It passes wait=true so the API withholds its HTTP
-// response until the hardware operation completes (or the request times out),
-// keeping the CLI fully synchronous.
+// setPower issues an ATX power action.
 //
 // Some GLKVM firmware builds perform the requested action but then reply with
 // an HTTP 500 internal error instead of a clean success response. When that
@@ -102,7 +99,6 @@ func (c *apiClient) atxState(ctx context.Context) (atxState, error) {
 func (c *apiClient) setPower(ctx context.Context, action string) error {
 	query := url.Values{}
 	query.Set("action", action)
-	query.Set("wait", "true")
 
 	var response apiResponse[map[string]json.RawMessage]
 	if err := c.do(ctx, http.MethodPost, "/api/atx/power", query, &response); err != nil {
@@ -112,7 +108,7 @@ func (c *apiClient) setPower(ctx context.Context, action string) error {
 		return apiError(response.Error)
 	}
 
-	fmt.Printf("Server power on: %s\n", action)
+	fmt.Printf("Server power status: %s\n", action)
 	return nil
 }
 
@@ -134,17 +130,13 @@ func (c *apiClient) powerOn(ctx context.Context) error {
 	return c.setPower(ctx, "on")
 }
 
-// click issues an ATX button click and returns only once the GLKVM has finished
-// performing it. It passes wait=true so the API withholds its HTTP response
-// until the click completes (or the request times out), keeping the CLI fully
-// synchronous.
+// click issues an ATX button click.
 //
-// As with setPower, an HTTP 500 after a wait=true click may still mean the
-// click went through, so we recover by confirming the ATX is no longer busy.
+// As with setPower, an HTTP 500 after a click may still mean the click went
+// through, so we recover by confirming the ATX is no longer busy.
 func (c *apiClient) click(ctx context.Context, button string) error {
 	query := url.Values{}
 	query.Set("button", button)
-	query.Set("wait", "true")
 
 	var response apiResponse[map[string]json.RawMessage]
 	if err := c.do(ctx, http.MethodPost, "/api/atx/click", query, &response); err != nil {
@@ -158,10 +150,10 @@ func (c *apiClient) click(ctx context.Context, button string) error {
 	return nil
 }
 
-// recoverFromHTTP500 handles the GLKVM firmware quirk where a wait=true POST
-// performs the ATX action but returns HTTP 500 instead of a clean success. It
-// re-checks the ATX state to confirm the action actually took effect, and only
-// surfaces the original error if the expected state was never reached.
+// recoverFromHTTP500 handles the GLKVM firmware quirk where a POST performs
+// the ATX action but returns HTTP 500 instead of a clean success. It re-checks
+// the ATX state to confirm the action actually took effect, and only surfaces
+// the original error if the expected state was never reached.
 func (c *apiClient) recoverFromHTTP500(postErr error, check func(atxState) bool, label, value string) error {
 	var statusErr httpStatusError
 	if !errors.As(postErr, &statusErr) || statusErr.statusCode != http.StatusInternalServerError {
@@ -171,7 +163,7 @@ func (c *apiClient) recoverFromHTTP500(postErr error, check func(atxState) bool,
 		return postErr
 	}
 	// Use a fresh timeout: the parent context may already be exhausted by the
-	// wait=true POST that triggered the 500.
+	// POST that triggered the 500.
 	recheckCtx, recheckCancel := context.WithTimeout(context.Background(), c.recheckTimeout())
 	defer recheckCancel()
 	if c.waitForPowerState(recheckCtx, check) {
@@ -182,28 +174,30 @@ func (c *apiClient) recoverFromHTTP500(postErr error, check func(atxState) bool,
 }
 
 // recheckTimeout returns how long to poll ATX state after a spurious HTTP 500.
-// It falls back to a default of 10s if the configured timeout is unset.
+// It falls back to a default of 30s if the configured timeout is unset.
 func (c *apiClient) recheckTimeout() time.Duration {
 	if c.timeout > 0 {
 		return c.timeout
 	}
-	return 10 * time.Second
+	return 30 * time.Second
 }
 
-// waitForPowerState polls GET /api/atx until check(state) returns true, the
-// context expires, or a state fetch fails.
+// waitForPowerState waits 5 seconds, then polls GET /api/atx until
+// check(state) returns true, the context expires, or a state fetch fails. The
+// delay before each check keeps status checks from hammering the API.
 func (c *apiClient) waitForPowerState(ctx context.Context, check func(atxState) bool) bool {
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
-		state, err := c.atxState(ctx)
-		if err == nil && check(state) {
-			return true
-		}
+		// Wait 5 seconds before each check to avoid hammering the API.
 		select {
 		case <-ctx.Done():
 			return false
 		case <-ticker.C:
+		}
+		state, err := c.atxState(ctx)
+		if err == nil && check(state) {
+			return true
 		}
 	}
 }

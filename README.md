@@ -45,15 +45,15 @@ Commands:
 - `click`, `click-long`, `reset-click` - raw button clicks via `POST /api/atx/click`
 
 The power commands (`on`, `off`, `force-off`, `reset`, and the `click`
-variants) are fully synchronous: each passes `wait=true` to the GLKVM so the
-API withholds its HTTP response until the ATX action completes. The CLI only
-exits after the GLKVM responds (`ok=true` means the operation finished) or the
-request times out (default 10s, configurable with `-timeout`).
+variants) are synchronous: each sends its action to the GLKVM and waits for
+the API to respond. The CLI only exits after the GLKVM responds (`ok=true`
+means the operation finished) or the request times out (default 30s,
+configurable with `-timeout`).
 
 > **GLKVM HTTP 500 quirk.** Some GLKVM firmware builds perform the requested
 > ATX action but then reply with `HTTP 500: Server got itself in trouble` (an
 > unhandled Go server error) instead of a clean success response. To handle
-> this, after a waited power/click POST returns 500 the CLI re-checks `GET
+> this, after a power/click POST returns 500 the CLI re-checks `GET
 > /api/atx` (using a fresh timeout) to confirm the action actually took effect
 > (e.g. power reaches the expected state, or ATX is no longer busy). If the
 > action is confirmed, the command exits successfully with a
