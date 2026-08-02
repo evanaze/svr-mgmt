@@ -41,17 +41,14 @@ func run(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithTimeout(ctx, cfg.timeout)
 	defer cancel()
 
-	if cfg.keepAwake {
-		if err := enableCaffeine(ctx, cfg.sshTarget); err != nil {
-			return fmt.Errorf("keep-awake: %w", err)
-		}
-		fmt.Println("caffeine enabled on server")
-	}
-
 	if err := client.login(ctx); err != nil {
 		return err
 	}
 
+	// When -keep-awake is combined with a power-on command (e.g. "on"), the
+	// machine may be off at first, so the SSH connection can only be made after
+	// it has booted. Run the power action first, then retry Caffeine over SSH
+	// until the server comes up.
 	switch command {
 	case "status":
 		state, err := client.atxState(ctx)
@@ -60,7 +57,9 @@ func run(ctx context.Context, args []string) error {
 		}
 		printState(state)
 	case "on":
-		return client.powerOn(ctx)
+		if err := client.powerOn(ctx); err != nil {
+			return err
+		}
 	case "off":
 		return client.setPower(ctx, "off")
 	case "force-off", "off-hard":
@@ -75,6 +74,13 @@ func run(ctx context.Context, args []string) error {
 		return client.click(ctx, "reset")
 	default:
 		return fmt.Errorf("unknown command %q", command)
+	}
+
+	if cfg.keepAwake {
+		if err := keepAwake(ctx, cfg.sshTarget); err != nil {
+			return fmt.Errorf("keep-awake: %w", err)
+		}
+		fmt.Println("caffeine enabled on server")
 	}
 
 	return nil

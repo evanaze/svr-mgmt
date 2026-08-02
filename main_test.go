@@ -628,3 +628,35 @@ func TestDebugWriter_DefaultsToStderr(t *testing.T) {
 		t.Fatalf("debugWriter = %v, want os.Stderr", debugWriter)
 	}
 }
+
+func TestKeepAwake_RetriesUntilSSHSucceeds(t *testing.T) {
+	fakeDir := t.TempDir()
+	countFile := filepath.Join(fakeDir, "count")
+	fake := filepath.Join(fakeDir, "ssh")
+	// Fail on the first two invocations (machine still booting), succeed on the third.
+	script := `#!/bin/sh
+if [ -f "$1" ]; then
+  n=$(cat "$1")
+  n=$((n+1))
+  echo $n > "$1"
+  if [ $n -ge 2 ]; then exit 0; fi
+else
+  echo 1 > "$1"
+fi
+exit 1
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	keepAwakePollInterval = time.Millisecond
+	t.Cleanup(func() { keepAwakePollInterval = 5 * time.Second })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := keepAwake(ctx, countFile); err != nil {
+		t.Fatalf("keepAwake() error = %v, want nil after retry", err)
+	}
+}
