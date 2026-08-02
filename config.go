@@ -30,7 +30,7 @@ func parseArgs(args []string) (config, string, error) {
 		username:           envDefault("GLKVM_USER", "admin"),
 		password:           os.Getenv("GLKVM_PASSWORD"),
 		insecureSkipVerify: envBoolDefault("GLKVM_INSECURE_SKIP_VERIFY", true),
-		timeout:            30 * time.Second,
+		timeout:            60 * time.Second,
 		debug:              envBoolDefault("GLKVM_DEBUG", false),
 		keepAwake:          envBoolDefault("GLKVM_KEEP_AWAKE", false),
 		sshTarget:          envDefault("GLKVM_SSH_TARGET", defaultSshHost),
