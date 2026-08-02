@@ -225,6 +225,53 @@ func TestSetPower_ReturnsHTTPError_whenHTTP500NotConfirmed(t *testing.T) {
 	}
 }
 
+func TestAPIClientPowerOff_LongPresses_whenOn(t *testing.T) {
+	t.Parallel()
+
+	var clickRequests atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/atx":
+			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"on","leds":{"power":true,"hdd":false}}}`)
+		case "/api/atx/click":
+			clickRequests.Add(1)
+			if got := r.URL.Query().Get("button"); got != "power_long" {
+				t.Fatalf("button = %q, want %q", got, "power_long")
+			}
+			writeJSON(t, w, `{"ok":true,"result":{}}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+
+	if err := client.powerOff(context.Background()); err != nil {
+		t.Fatalf("powerOff() error = %v", err)
+	}
+	if got := clickRequests.Load(); got != 1 {
+		t.Fatalf("click request count = %d, want 1", got)
+	}
+}
+
+func TestAPIClientPowerOff_Skips_whenAlreadyOff(t *testing.T) {
+	t.Parallel()
+
+	var clickRequests atomic.Int32
+	client := newTestAPIClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/atx" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
+	}))
+
+	if err := client.powerOff(context.Background()); err != nil {
+		t.Fatalf("powerOff() error = %v", err)
+	}
+	if got := clickRequests.Load(); got != 0 {
+		t.Fatalf("click request count = %d, want 0", got)
+	}
+}
+
+
 func TestAPIClientPowerOn_Recovers_whenHTTP500AndStateConfirms(t *testing.T) {
 	t.Parallel()
 
@@ -572,6 +619,7 @@ func TestCaffeineGSettingsArgs_EnableTrue(t *testing.T) {
 
 	got := caffeineGSettingsArgs(true)
 	want := []string{
+		"gsettings",
 		"set",
 		"org.gnome.shell.extensions.caffeine",
 		"cli-toggle",
@@ -592,6 +640,7 @@ func TestCaffeineGSettingsArgs_EnableFalse(t *testing.T) {
 
 	got := caffeineGSettingsArgs(false)
 	want := []string{
+		"gsettings",
 		"set",
 		"org.gnome.shell.extensions.caffeine",
 		"cli-toggle",

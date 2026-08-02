@@ -61,7 +61,7 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 	case "off":
-		return client.setPower(ctx, "off")
+		return client.powerOff(ctx)
 	case "force-off", "off-hard":
 		return client.setPower(ctx, "off_hard")
 	case "reset", "reset-hard":

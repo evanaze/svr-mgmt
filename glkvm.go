@@ -130,6 +130,28 @@ func (c *apiClient) powerOn(ctx context.Context) error {
 	return c.setPower(ctx, "on")
 }
 
+// powerOff powers the server off. Because the GLKVM firmware's soft ACPI
+// shutdown action (action=off) is unreliable, we instead long-press the
+// physical power button (which the OS handles as a shutdown request). If the
+// server is already off there is nothing to do.
+func (c *apiClient) powerOff(ctx context.Context) error {
+	state, err := c.atxState(ctx)
+	if err != nil {
+		return err
+	}
+	if !state.Enabled {
+		return errors.New("ATX power control is disabled")
+	}
+	if state.Busy {
+		return errors.New("ATX is busy performing another operation")
+	}
+	if !state.isPoweredOn() {
+		fmt.Println("server already powered off")
+		return nil
+	}
+	return c.click(ctx, "power_long")
+}
+
 // click issues an ATX button click.
 //
 // As with setPower, an HTTP 500 after a click may still mean the click went

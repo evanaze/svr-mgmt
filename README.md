@@ -39,7 +39,7 @@ Commands:
 - All commands first log in with `POST /api/auth/login` and reuse the returned `auth_token` cookie for later API requests.
 - `status` - read ATX power/HDD LED state from `GET /api/atx`
 - `on` - read `GET /api/atx` first, skip if already on, refuse if ATX is busy, then request `POST /api/atx/power?action=on`
-- `off` - request soft ACPI shutdown with `action=off`
+- `off` - check `GET /api/atx` first; if already off it does nothing, otherwise it long-presses the power button (`click?button=power_long`) to shut the server down. Used instead of the GLKVM's unreliable soft ACPI `action=off`.
 - `force-off` - long-press power with `action=off_hard`
 - `reset` - hardware reset with `action=reset_hard`
 - `click`, `click-long`, `reset-click` - raw button clicks via `POST /api/atx/click`
@@ -99,7 +99,7 @@ export GLKVM_SSH_TARGET=user@server
 `-keep-awake` requires an `-ssh-target` and errors out if none is set. It also picks up `GLKVM_KEEP_AWAKE=true`.
 ## Notes
 
-- `off` is a normal short power-button press; the OS must handle ACPI shutdown.
+- `off` long-presses the power button (same as holding the physical button) instead of the GLKVM's unreliable soft ACPI `action=off`. It checks the ATX state first and does nothing if the server is already off.
 - `force-off` is equivalent to holding the physical power button and can lose data.
 - `on` is preferred over `click` because the PiKVM-compatible API should do nothing if the server is already powered on.
 - Use `-debug` (or `GLKVM_DEBUG=true`) to log every GLKVM API request and response to stderr, including redacted request bodies and response bodies. This is useful for troubleshooting commands that fail.

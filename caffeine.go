@@ -13,6 +13,7 @@ import (
 // managed server to toggle the GNOME Caffeine extension.
 func caffeineGSettingsArgs(enabled bool) []string {
 	return []string{
+		"gsettings",
 		"set",
 		"org.gnome.shell.extensions.caffeine",
 		"cli-toggle",
