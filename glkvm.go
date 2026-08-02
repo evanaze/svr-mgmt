@@ -87,9 +87,14 @@ func (c *apiClient) atxState(ctx context.Context) (atxState, error) {
 	return response.Result, nil
 }
 
+// setPower issues an ATX power action and returns only once the GLKVM has
+// finished performing it. It passes wait=True so the API withholds its HTTP
+// response until the hardware operation completes (or the request times out),
+// keeping the CLI fully synchronous.
 func (c *apiClient) setPower(ctx context.Context, action string) error {
 	query := url.Values{}
 	query.Set("action", action)
+	query.Set("wait", "True")
 
 	var response apiResponse[map[string]json.RawMessage]
 	if err := c.do(ctx, http.MethodPost, "/api/atx/power", query, &response); err != nil {
@@ -121,9 +126,14 @@ func (c *apiClient) powerOn(ctx context.Context) error {
 	return c.setPower(ctx, "on")
 }
 
+// click issues an ATX button click and returns only once the GLKVM has finished
+// performing it. It passes wait=True so the API withholds its HTTP response
+// until the click completes (or the request times out), keeping the CLI fully
+// synchronous.
 func (c *apiClient) click(ctx context.Context, button string) error {
 	query := url.Values{}
 	query.Set("button", button)
+	query.Set("wait", "True")
 
 	var response apiResponse[map[string]json.RawMessage]
 	if err := c.do(ctx, http.MethodPost, "/api/atx/click", query, &response); err != nil {

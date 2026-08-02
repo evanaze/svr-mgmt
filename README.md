@@ -44,10 +44,11 @@ Commands:
 - `reset` - hardware reset with `action=reset_hard`
 - `click`, `click-long`, `reset-click` - raw button clicks via `POST /api/atx/click`
 
-Each command reports success or failure as soon as the GLKVM HTTP response
-arrives: `ok=true` means the command succeeded, while `ok=false` or a non-2xx
-status returns an error immediately. The CLI does not wait for or re-check the
-ATX power state after issuing a command.
+The power commands (`on`, `off`, `force-off`, `reset`, and the `click`
+variants) are fully synchronous: each passes `wait=True` to the GLKVM so the
+API withholds its HTTP response until the ATX action completes. The CLI only
+exits after the GLKVM responds (`ok=true` means the operation finished) or the
+request times out (default 10s, configurable with `-timeout`).
 
 You can also pass config as flags:
 

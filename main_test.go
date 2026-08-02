@@ -155,8 +155,8 @@ func TestAPIClientPowerOnPosts_whenOff(t *testing.T) {
 			if got := r.URL.Query().Get("action"); got != "on" {
 				t.Fatalf("action = %q, want %q", got, "on")
 			}
-			if got := r.URL.Query().Get("wait"); got != "" {
-				t.Fatalf("wait = %q, want empty (removed)", got)
+			if got := r.URL.Query().Get("wait"); got != "True" {
+				t.Fatalf("wait = %q, want %q", got, "True")
 			}
 			if got := r.Method; got != http.MethodPost {
 				t.Fatalf("method = %q, want %q", got, http.MethodPost)
@@ -189,6 +189,9 @@ func TestSetPower_ReturnsHTTPError_whenNon2xxResponse(t *testing.T) {
 			stateRequests.Add(1)
 			writeJSON(t, w, `{"ok":true,"result":{"busy":false,"enabled":true,"power":"off","leds":{"power":false,"hdd":false}}}`)
 		case "/api/atx/power":
+			if got := r.URL.Query().Get("wait"); got != "True" {
+				t.Fatalf("setPower wait = %q, want %q", got, "True")
+			}
 			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -239,6 +242,9 @@ func TestClick_ReturnsHTTPError_whenNon2xxResponse(t *testing.T) {
 		case "/api/atx/click":
 			if got := r.URL.Query().Get("button"); got != "power" {
 				t.Fatalf("button = %q, want %q", got, "power")
+			}
+			if got := r.URL.Query().Get("wait"); got != "True" {
+				t.Fatalf("click wait = %q, want %q", got, "True")
 			}
 			http.Error(w, "Server got itself in trouble", http.StatusInternalServerError)
 		default:
