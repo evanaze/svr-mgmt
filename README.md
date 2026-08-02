@@ -45,7 +45,7 @@ Commands:
 - `click`, `click-long`, `reset-click` - raw button clicks via `POST /api/atx/click`
 
 The power commands (`on`, `off`, `force-off`, `reset`, and the `click`
-variants) are fully synchronous: each passes `wait=True` to the GLKVM so the
+variants) are fully synchronous: each passes `wait=true` to the GLKVM so the
 API withholds its HTTP response until the ATX action completes. The CLI only
 exits after the GLKVM responds (`ok=true` means the operation finished) or the
 request times out (default 10s, configurable with `-timeout`).
