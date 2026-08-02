@@ -11,6 +11,7 @@ import (
 )
 
 const defaultBaseURL = "https://ai-kvm.spitz-pickerel.ts.net"
+const defaultSshHost = "earth"
 
 type config struct {
 	baseURL            string
@@ -20,7 +21,7 @@ type config struct {
 	timeout            time.Duration
 	debug              bool
 	keepAwake          bool
-	caffeineSchemaDir  string
+	sshTarget          string
 }
 
 func parseArgs(args []string) (config, string, error) {
@@ -32,7 +33,7 @@ func parseArgs(args []string) (config, string, error) {
 		timeout:            30 * time.Second,
 		debug:              envBoolDefault("GLKVM_DEBUG", false),
 		keepAwake:          envBoolDefault("GLKVM_KEEP_AWAKE", false),
-		caffeineSchemaDir:  envDefault("GLKVM_CAFFEINE_SCHEMA_DIR", defaultCaffeineSchemaDir()),
+		sshTarget:          envDefault("GLKVM_SSH_TARGET", defaultSshHost),
 	}
 
 	fs := flag.NewFlagSet("svr-mgmt", flag.ContinueOnError)
@@ -43,9 +44,9 @@ func parseArgs(args []string) (config, string, error) {
 	fs.BoolVar(&cfg.insecureSkipVerify, "insecure-skip-verify", cfg.insecureSkipVerify, "skip TLS certificate verification for self-signed KVM certs")
 	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "request timeout")
 	fs.BoolVar(&cfg.debug, "debug", cfg.debug, "log GLKVM API requests and responses to stderr")
-	fs.BoolVar(&cfg.keepAwake, "keep-awake", cfg.keepAwake, "enable the GNOME Caffeine extension on the host so it does not sleep while the server is in use")
+	fs.BoolVar(&cfg.keepAwake, "keep-awake", cfg.keepAwake, "enable the GNOME Caffeine extension on the managed server so it does not sleep while in use")
 	fs.BoolVar(&cfg.keepAwake, "ka", cfg.keepAwake, "short alias for -keep-awake")
-	fs.StringVar(&cfg.caffeineSchemaDir, "caffeine-schema-dir", cfg.caffeineSchemaDir, "directory containing the caffeine@patapon.info gsettings schema (auto-detected by default)")
+	fs.StringVar(&cfg.sshTarget, "ssh-target", cfg.sshTarget, "SSH target of the managed server to enable Caffeine on, e.g. user@server or an SSH config alias")
 
 	if err := fs.Parse(args); err != nil {
 		return cfg, "", err
@@ -82,8 +83,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  -insecure-skip-verify  GLKVM_INSECURE_SKIP_VERIFY, defaults to true")
 	fmt.Fprintln(w, "  -timeout               defaults to 30s")
 	fmt.Fprintln(w, "  -debug                 GLKVM_DEBUG, log GLKVM API requests/responses to stderr")
-	fmt.Fprintln(w, "  -keep-awake / -ka      GLKVM_KEEP_AWAKE, enable GNOME Caffeine on the host so it does not sleep")
-	fmt.Fprintln(w, "  -caffeine-schema-dir   GLKVM_CAFFEINE_SCHEMA_DIR, auto-detected from common install paths")
+	fmt.Fprintln(w, "  -keep-awake / -ka      GLKVM_KEEP_AWAKE, enable GNOME Caffeine on the managed server so it does not sleep")
+	fmt.Fprintln(w, "  -ssh-target             GLKVM_SSH_TARGET, SSH target of the managed server to run Caffeine on (required with -keep-awake)")
 }
 
 func envDefault(key string, fallback string) string {

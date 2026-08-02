@@ -543,25 +543,35 @@ func TestParseArgs_KeepAwakeDefaultsFalse(t *testing.T) {
 	}
 }
 
-func TestParseArgs_CaffeineSchemaDirOverride(t *testing.T) {
+func TestParseArgs_SSHTargetOverride(t *testing.T) {
 	t.Parallel()
 
-	const want = "/tmp/some-schema-dir"
-	cfg, _, err := parseArgs([]string{"-caffeine-schema-dir", want, "status"})
+	const want = "user@server"
+	cfg, _, err := parseArgs([]string{"-ssh-target", want, "status"})
 	if err != nil {
 		t.Fatalf("parseArgs() error = %v", err)
 	}
-	if cfg.caffeineSchemaDir != want {
-		t.Fatalf("cfg.caffeineSchemaDir = %q, want %q", cfg.caffeineSchemaDir, want)
+	if cfg.sshTarget != want {
+		t.Fatalf("cfg.sshTarget = %q, want %q", cfg.sshTarget, want)
+	}
+}
+
+func TestParseArgs_SSHTargetFromEnv(t *testing.T) {
+	t.Setenv("GLKVM_SSH_TARGET", "user@server")
+	cfg, _, err := parseArgs([]string{"status"})
+	if err != nil {
+		t.Fatalf("parseArgs() error = %v", err)
+	}
+	if cfg.sshTarget != "user@server" {
+		t.Fatalf("cfg.sshTarget = %q, want %q", cfg.sshTarget, "user@server")
 	}
 }
 
 func TestCaffeineGSettingsArgs_EnableTrue(t *testing.T) {
 	t.Parallel()
 
-	got := caffeineGSettingsArgs("/schemas/caffeine", true)
+	got := caffeineGSettingsArgs(true)
 	want := []string{
-		"--schemadir", "/schemas/caffeine",
 		"set",
 		"org.gnome.shell.extensions.caffeine",
 		"cli-toggle",
@@ -580,9 +590,8 @@ func TestCaffeineGSettingsArgs_EnableTrue(t *testing.T) {
 func TestCaffeineGSettingsArgs_EnableFalse(t *testing.T) {
 	t.Parallel()
 
-	got := caffeineGSettingsArgs("/schemas/caffeine", false)
+	got := caffeineGSettingsArgs(false)
 	want := []string{
-		"--schemadir", "/schemas/caffeine",
 		"set",
 		"org.gnome.shell.extensions.caffeine",
 		"cli-toggle",
@@ -598,54 +607,20 @@ func TestCaffeineGSettingsArgs_EnableFalse(t *testing.T) {
 	}
 }
 
-func TestDefaultCaffeineSchemaDir_PrefersExistingCompiledSchema(t *testing.T) {
-	t.Parallel()
+func TestEnableCaffeine_FormsSSHCommand(t *testing.T) {
 
-	dir := t.TempDir()
-	compiled := filepath.Join(dir, "gschemas.compiled")
-	if err := os.WriteFile(compiled, []byte{}, 0o644); err != nil {
+	// Validate the SSH invocation shape via a fake ssh binary on PATH.
+	fakeDir := t.TempDir()
+	fake := filepath.Join(fakeDir, "ssh")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf '%s\n' \"$@\"\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	original := caffeineSchemaCandidates
-	t.Cleanup(func() { caffeineSchemaCandidates = original })
-
-	caffeineSchemaCandidates = func() []string {
-		return []string{"/nonexistent/path", dir, "/also/nonexistent"}
-	}
-
-	if got := defaultCaffeineSchemaDir(); got != dir {
-		t.Fatalf("defaultCaffeineSchemaDir() = %q, want %q", got, dir)
+	if err := enableCaffeine(context.Background(), "user@server"); err != nil {
+		t.Fatalf("enableCaffeine() error = %v", err)
 	}
 }
-
-func TestDefaultCaffeineSchemaDir_FallsBackToFirstCandidate(t *testing.T) {
-	t.Parallel()
-
-	original := caffeineSchemaCandidates
-	t.Cleanup(func() { caffeineSchemaCandidates = original })
-
-	const first = "/nonexistent/first"
-	caffeineSchemaCandidates = func() []string {
-		return []string{first, "/nonexistent/second"}
-	}
-
-	if got := defaultCaffeineSchemaDir(); got != first {
-		t.Fatalf("defaultCaffeineSchemaDir() = %q, want %q", got, first)
-	}
-}
-
-func TestEnableCaffeine_ReturnsErrorWhenSchemaMissing(t *testing.T) {
-	t.Parallel()
-	t.Skip("requires gsettings binary; validated manually")
-
-	missing := t.TempDir()
-	err := enableCaffeine(context.Background(), missing)
-	if err == nil {
-		t.Fatal("enableCaffeine() error = nil, want error for missing schema")
-	}
-}
-
 func TestDebugWriter_DefaultsToStderr(t *testing.T) {
 	t.Parallel()
 

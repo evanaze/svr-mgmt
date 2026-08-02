@@ -25,6 +25,10 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	}
 
+	if cfg.keepAwake && cfg.sshTarget == "" {
+		return errors.New("keep-awake requires an SSH target; set GLKVM_SSH_TARGET or pass -ssh-target")
+	}
+
 	if cfg.password == "" {
 		return errors.New("missing password; set GLKVM_PASSWORD or pass -password")
 	}
@@ -38,10 +42,10 @@ func run(ctx context.Context, args []string) error {
 	defer cancel()
 
 	if cfg.keepAwake {
-		if err := enableCaffeine(ctx, cfg.caffeineSchemaDir); err != nil {
+		if err := enableCaffeine(ctx, cfg.sshTarget); err != nil {
 			return fmt.Errorf("keep-awake: %w", err)
 		}
-		fmt.Println("caffeine enabled on host")
+		fmt.Println("caffeine enabled on server")
 	}
 
 	if err := client.login(ctx); err != nil {
