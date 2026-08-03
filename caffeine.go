@@ -9,24 +9,34 @@ import (
 	"time"
 )
 
-// caffeineGSettingsArgs builds the gsettings invocation executed on the
+// caffeineSchema is the gsettings schema id for the GNOME Caffeine extension.
+const caffeineSchema = "org.gnome.shell.extensions.caffeine"
+
+// caffeineGSettingsArgs builds the gsettings invocations executed on the
 // managed server to toggle the GNOME Caffeine extension.
-func caffeineGSettingsArgs(enabled bool) []string {
-	return []string{
-		"gsettings",
-		"set",
-		"org.gnome.shell.extensions.caffeine",
-		"cli-toggle",
-		strconv.FormatBool(enabled),
+//
+// The extension treats `cli-toggle` as a one-shot, non-persistent signal: it
+// fires the toggle for the current session but its in-memory state resets to
+// off every time GNOME Shell reloads the extension. To keep the server awake
+// indefinitely, we therefore also persist `user-enabled` and `restore-state`,
+// which the extension reads on startup to restore Caffeine as enabled.
+func caffeineGSettingsArgs(enabled bool) [][]string {
+	val := strconv.FormatBool(enabled)
+	return [][]string{
+		{"gsettings", "set", caffeineSchema, "cli-toggle", val},
+		{"gsettings", "set", caffeineSchema, "user-enabled", val},
+		{"gsettings", "set", caffeineSchema, "restore-state", val},
 	}
 }
 
 func enableCaffeine(ctx context.Context, sshTarget string) error {
-	args := append([]string{sshTarget}, caffeineGSettingsArgs(true)...)
-	cmd := exec.CommandContext(ctx, "ssh", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ssh %s: %w: %s", sshTarget, err, strings.TrimSpace(string(out)))
+	for _, args := range caffeineGSettingsArgs(true) {
+		full := append([]string{sshTarget}, args...)
+		cmd := exec.CommandContext(ctx, "ssh", full...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("ssh %s %s: %w: %s", sshTarget, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		}
 	}
 	return nil
 }

@@ -97,6 +97,12 @@ export GLKVM_SSH_TARGET=user@server
 ```
 
 `-keep-awake` requires an `-ssh-target` and errors out if none is set. It also picks up `GLKVM_KEEP_AWAKE=true`.
+
+`-keep-awake` keeps the server awake **indefinitely**. Because Caffeine's
+`cli-toggle` gsettings key is only a transient, one-shot signal (the extension
+resets it and its in-memory state turns off every time GNOME Shell reloads the
+extension), the CLI also persists `user-enabled` and `restore-state` so the
+extension restores Caffeine as enabled after each GNOME Shell restart.
 ## Notes
 
 - `off` long-presses the power button (same as holding the physical button) instead of the GLKVM's unreliable soft ACPI `action=off`. It checks the ATX state first and does nothing if the server is already off.

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -618,18 +619,16 @@ func TestCaffeineGSettingsArgs_EnableTrue(t *testing.T) {
 	t.Parallel()
 
 	got := caffeineGSettingsArgs(true)
-	want := []string{
-		"gsettings",
-		"set",
-		"org.gnome.shell.extensions.caffeine",
-		"cli-toggle",
-		"true",
+	want := [][]string{
+		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "cli-toggle", "true"},
+		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "user-enabled", "true"},
+		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "restore-state", "true"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("args = %v, want %v", got, want)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if !slices.Equal(got[i], want[i]) {
 			t.Fatalf("args[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
@@ -639,18 +638,16 @@ func TestCaffeineGSettingsArgs_EnableFalse(t *testing.T) {
 	t.Parallel()
 
 	got := caffeineGSettingsArgs(false)
-	want := []string{
-		"gsettings",
-		"set",
-		"org.gnome.shell.extensions.caffeine",
-		"cli-toggle",
-		"false",
+	want := [][]string{
+		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "cli-toggle", "false"},
+		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "user-enabled", "false"},
+		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "restore-state", "false"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("args = %v, want %v", got, want)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if !slices.Equal(got[i], want[i]) {
 			t.Fatalf("args[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
@@ -658,16 +655,38 @@ func TestCaffeineGSettingsArgs_EnableFalse(t *testing.T) {
 
 func TestEnableCaffeine_FormsSSHCommand(t *testing.T) {
 
-	// Validate the SSH invocation shape via a fake ssh binary on PATH.
+	// Validate the SSH invocation shape via a fake ssh binary on PATH that logs
+	// every argument it receives.
 	fakeDir := t.TempDir()
 	fake := filepath.Join(fakeDir, "ssh")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf '%s\n' \"$@\"\nexit 0\n"), 0o755); err != nil {
+	logFile := filepath.Join(fakeDir, "log")
+	fakeScript := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" >> %q\nexit 0\n", logFile)
+	if err := os.WriteFile(fake, []byte(fakeScript), 0o755); err != nil {
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
 	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	if err := enableCaffeine(context.Background(), "user@server"); err != nil {
 		t.Fatalf("enableCaffeine() error = %v", err)
+	}
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	want := []string{
+		"user@server", "gsettings", "set", "org.gnome.shell.extensions.caffeine", "cli-toggle", "true",
+		"user@server", "gsettings", "set", "org.gnome.shell.extensions.caffeine", "user-enabled", "true",
+		"user@server", "gsettings", "set", "org.gnome.shell.extensions.caffeine", "restore-state", "true",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ssh args = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ssh arg[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }
 func TestDebugWriter_DefaultsToStderr(t *testing.T) {
