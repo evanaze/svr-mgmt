@@ -47,7 +47,7 @@ func run(ctx context.Context, args []string) error {
 
 	// When -keep-awake is combined with a power-on command (e.g. "on"), the
 	// machine may be off at first, so the SSH connection can only be made after
-	// it has booted. Run the power action first, then retry Caffeine over SSH
+	// it has booted. Run the power action first, then retry the sleep inhibit over SSH
 	// until the server comes up.
 	switch command {
 	case "status":
@@ -80,7 +80,7 @@ func run(ctx context.Context, args []string) error {
 		if err := keepAwake(ctx, cfg.sshTarget); err != nil {
 			return fmt.Errorf("keep-awake: %w", err)
 		}
-		fmt.Println("caffeine enabled on server")
+		fmt.Println("server inhibited from sleeping")
 	}
 
 	return nil

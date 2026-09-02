@@ -78,7 +78,7 @@ password redacted.
 
 ### Keep the managed server awake
 
-`--keep-awake` / `-ka` enables the [GNOME Caffeine extension](https://github.com/eonpatapon/gnome-shell-extension-caffeine#command-line-support) **on the managed server** (not the host running this CLI) so the server does not suspend while you work on it. There is no Caffeine API on the GLKVM, so it runs `gsettings ... set org.gnome.shell.extensions.caffeine cli-toggle true` on the server over SSH. The devices connect over your tailnet, so pass whatever target you would to `ssh` (e.g. `user@server` or an SSH config alias) and authenticate as you normally would (agent/key).
+`--keep-awake` / `-ka` uses **systemd-inhibit on the managed server** (not the host running this CLI) so the server does not suspend while you work on it. It runs `systemd-inhibit --what=sleep --who=svr-mgmt sleep infinity` on the server over SSH, detached in the background so the inhibit lock persists after the SSH session ends. The devices connect over your tailnet, so pass whatever target you would to `ssh` (e.g. `user@server` or an SSH config alias) and authenticate as you normally would (agent/key).
 
 Specify the target with `-ssh-target` or `GLKVM_SSH_TARGET`:
 
@@ -98,11 +98,7 @@ export GLKVM_SSH_TARGET=user@server
 
 `-keep-awake` requires an `-ssh-target` and errors out if none is set. It also picks up `GLKVM_KEEP_AWAKE=true`.
 
-`-keep-awake` keeps the server awake **indefinitely**. Because Caffeine's
-`cli-toggle` gsettings key is only a transient, one-shot signal (the extension
-resets it and its in-memory state turns off every time GNOME Shell reloads the
-extension), the CLI also persists `user-enabled` and `restore-state` so the
-extension restores Caffeine as enabled after each GNOME Shell restart.
+`-keep-awake` keeps the server awake **indefinitely**. `systemd-inhibit` holds its lock only for the lifetime of its child, so the CLI runs a long-lived `sleep infinity` under it, detached with `nohup` and stdio redirected so nothing holds the SSH channel open. The inhibit lock persists until the process is killed or the machine reboots.
 ## Notes
 
 - `off` long-presses the power button (same as holding the physical button) instead of the GLKVM's unreliable soft ACPI `action=off`. It checks the ATX state first and does nothing if the server is already off.

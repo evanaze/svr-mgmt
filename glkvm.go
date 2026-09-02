@@ -69,7 +69,7 @@ func (c *apiClient) login(ctx context.Context) error {
 	form.Set("user", c.username)
 	form.Set("passwd", c.password)
 
-	var response apiResponse[map[string]string]
+	var response apiResponse[map[string]json.RawMessage]
 	if err := c.doWithBody(ctx, http.MethodPost, "/api/auth/login", nil, strings.NewReader(form.Encode()), "application/x-www-form-urlencoded", &response); err != nil {
 		return err
 	}

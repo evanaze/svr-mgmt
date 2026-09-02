@@ -615,45 +615,26 @@ func TestParseArgs_SSHTargetFromEnv(t *testing.T) {
 	}
 }
 
-func TestCaffeineGSettingsArgs_EnableTrue(t *testing.T) {
+func TestSystemdInhibitArgs(t *testing.T) {
 	t.Parallel()
 
-	got := caffeineGSettingsArgs(true)
-	want := [][]string{
-		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "cli-toggle", "true"},
-		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "user-enabled", "true"},
-		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "restore-state", "true"},
+	got := systemdInhibitArgs()
+	want := []string{
+		"nohup", "systemd-inhibit",
+		"--what=sleep",
+		"--who=svr-mgmt",
+		"--why=Keep managed server awake",
+		"sleep", "infinity",
+		">/dev/null", "2>&1", "&",
 	}
-	if len(got) != len(want) {
-		t.Fatalf("args = %v, want %v", got, want)
-	}
-	for i := range want {
-		if !slices.Equal(got[i], want[i]) {
-			t.Fatalf("args[%d] = %q, want %q", i, got[i], want[i])
-		}
+	if !slices.Equal(got, want) {
+		t.Fatalf("systemdInhibitArgs() = %q, want %q", got, want)
 	}
 }
 
-func TestCaffeineGSettingsArgs_EnableFalse(t *testing.T) {
-	t.Parallel()
 
-	got := caffeineGSettingsArgs(false)
-	want := [][]string{
-		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "cli-toggle", "false"},
-		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "user-enabled", "false"},
-		{"gsettings", "set", "org.gnome.shell.extensions.caffeine", "restore-state", "false"},
-	}
-	if len(got) != len(want) {
-		t.Fatalf("args = %v, want %v", got, want)
-	}
-	for i := range want {
-		if !slices.Equal(got[i], want[i]) {
-			t.Fatalf("args[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
 
-func TestEnableCaffeine_FormsSSHCommand(t *testing.T) {
+func TestEnableWakefulness_FormsSSHCommand(t *testing.T) {
 
 	// Validate the SSH invocation shape via a fake ssh binary on PATH that logs
 	// every argument it receives.
@@ -666,8 +647,8 @@ func TestEnableCaffeine_FormsSSHCommand(t *testing.T) {
 	}
 	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if err := enableCaffeine(context.Background(), "user@server"); err != nil {
-		t.Fatalf("enableCaffeine() error = %v", err)
+	if err := enableWakefulness(context.Background(), "user@server"); err != nil {
+		t.Fatalf("enableWakefulness() error = %v", err)
 	}
 
 	data, err := os.ReadFile(logFile)
@@ -676,9 +657,12 @@ func TestEnableCaffeine_FormsSSHCommand(t *testing.T) {
 	}
 	got := strings.Split(strings.TrimSpace(string(data)), "\n")
 	want := []string{
-		"user@server", "gsettings", "set", "org.gnome.shell.extensions.caffeine", "cli-toggle", "true",
-		"user@server", "gsettings", "set", "org.gnome.shell.extensions.caffeine", "user-enabled", "true",
-		"user@server", "gsettings", "set", "org.gnome.shell.extensions.caffeine", "restore-state", "true",
+		"user@server", "nohup", "systemd-inhibit",
+		"--what=sleep",
+		"--who=svr-mgmt",
+		"--why=Keep managed server awake",
+		"sleep", "infinity",
+		">/dev/null", "2>&1", "&",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("ssh args = %q, want %q", got, want)
